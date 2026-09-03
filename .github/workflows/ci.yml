@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same branch on new push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Per-module build, test, vet ─────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - plugins/vault-rest-engine
+          - plugins/vault-auth0-engine
+          - cred-rotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      # Verify the module graph is consistent with go.sum before doing anything else.
+      # This is a supply-chain guard: tampered modules will not match the recorded hashes.
+      - name: go mod verify
+        working-directory: ${{ matrix.module }}
+        run: go mod verify
+
+      - name: go mod tidy (drift check)
+        working-directory: ${{ matrix.module }}
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || {
+            echo "go.mod/go.sum are not tidy — run 'go mod tidy' and commit."
+            exit 1
+          }
+
+      - name: go build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: go vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: go test
+        working-directory: ${{ matrix.module }}
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ matrix.module == 'cred-rotation-api' && 'api' || matrix.module == 'plugins/vault-rest-engine' && 'rest-engine' || 'auth0-engine' }}
+          path: ${{ matrix.module }}/coverage.out
+          retention-days: 7
+
+  # ── Format check ────────────────────────────────────────────────────────────
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Use the API module's Go version for the format check.
+          go-version-file: cred-rotation-api/go.mod
+
+      - name: gofmt
+        run: |
+          UNFORMATTED=$(gofmt -l plugins/ cred-rotation-api/)
+          if [[ -n "$UNFORMATTED" ]]; then
+            echo "The following files are not gofmt'd:"
+            echo "$UNFORMATTED"
+            echo "Run: gofmt -w plugins/ cred-rotation-api/"
+            exit 1
+          fi
+
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - plugins/vault-rest-engine
+          - plugins/vault-auth0-engine
+          - cred-rotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: ${{ matrix.module }}
+          args: --config ../../.golangci.yml --timeout 5m

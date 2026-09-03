@@ -1,0 +1,53 @@
+run:
+  timeout: 5m
+  # Run per module — each workflow step cd's into the module directory.
+
+linters:
+  enable:
+    - gosec        # security anti-patterns (hardcoded secrets, weak crypto, TLS miscfg)
+    - govet        # correctness: shadow vars, printf mismatches
+    - staticcheck  # comprehensive static analysis (SA*, S*, ST*)
+    - errcheck     # unhandled errors — critical for crypto and I/O
+    - bodyclose    # HTTP response body leak
+    - noctx        # HTTP requests without context (timeout risk)
+    - unparam      # unused function parameters
+    - revive       # drop-in golint replacement with extra rules
+    - exhaustive   # exhaustive switch on enums (important for adapter dispatch)
+    - nilerr       # returning nil error while err != nil
+
+linters-settings:
+  gosec:
+    # Enable all rules; suppress false positives inline with //nolint:gosec comments.
+    # Key rules for this project:
+    # G101 — hardcoded credentials (catches any string with "secret", "password", etc.)
+    # G402 — TLS InsecureSkipVerify
+    # G403 — weak RSA key (< 2048 bits)
+    # G404 — weak random (math/rand instead of crypto/rand)
+    # G501/G502 — weak hash (MD5, SHA1 imports)
+    severity: medium
+    confidence: medium
+
+  errcheck:
+    # Require errors to be handled for these functions even if the convention
+    # is to ignore them.
+    check-type-assertions: true
+    check-blank: true
+
+  revive:
+    rules:
+      - name: exported         # exported symbols must be documented
+      - name: error-return     # error must be last return value
+      - name: error-naming     # error vars must be named errXxx or ErrXxx
+      - name: var-naming       # Go naming conventions
+
+issues:
+  # Don't report on generated files or test helpers.
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec     # test files may use insecure settings intentionally
+        - errcheck  # test helpers often ignore errors
+
+  # Max issues per linter — 0 = no limit.
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,132 @@
+name: Supply Chain Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Dependency review — block PRs introducing known-vulnerable deps ──────────
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    # Only runs on PRs — compares base vs head for new vulnerable dependencies.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Fail on moderate+ severity. CVSS >= 4.0.
+          fail-on-severity: moderate
+          # Also fail if a dependency has a known license incompatibility.
+          # All Go dependencies in this project must be OSI-approved.
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0
+
+  # ── go mod verify — cryptographic integrity of all downloaded modules ────────
+  mod-verify:
+    name: Module integrity (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - plugins/vault-rest-engine
+          - plugins/vault-auth0-engine
+          - cred-rotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: go mod verify
+        working-directory: ${{ matrix.module }}
+        run: |
+          # Verifies that each module in the build list has not been tampered with.
+          # Uses the cryptographic hashes recorded in go.sum.
+          # Fails if any downloaded module does not match its recorded hash.
+          go mod verify
+
+      - name: go mod tidy (drift check)
+        working-directory: ${{ matrix.module }}
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || {
+            echo "go.mod/go.sum not in sync — run 'go mod tidy' and commit."
+            exit 1
+          }
+
+  # ── SBOM generation — software bill of materials per module ─────────────────
+  sbom:
+    name: Generate SBOM (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    # Only generate SBOMs on pushes to main (not every PR).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      # write permission needed only if you want to attach SBOMs to releases.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: plugins/vault-rest-engine
+            name: rest-engine
+          - module: plugins/vault-auth0-engine
+            name: auth0-engine
+          - module: cred-rotation-api
+            name: cred-rotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ${{ matrix.module }}
+          format: cyclonedx-json
+          artifact-name: sbom-${{ matrix.name }}.cyclonedx.json
+          output-file: sbom-${{ matrix.name }}.cyclonedx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.cyclonedx.json
+          retention-days: 90
+
+  # ── Pin-check — ensure workflow action refs use SHAs, not mutable tags ───────
+  action-pin-check:
+    name: Action pin check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for unpinned actions (mutable tags)
+        run: |
+          # Warn if any workflow uses a mutable tag (e.g. @main, @master, @latest)
+          # instead of a pinned SHA. Unpinned actions are a supply-chain risk.
+          UNPINNED=$(grep -rE 'uses: .+@(main|master|latest|v[0-9]+)' .github/workflows/ \
+            | grep -v '^.*#' || true)
+          if [[ -n "$UNPINNED" ]]; then
+            echo "WARNING: The following actions use mutable tags (not SHA-pinned):"
+            echo "$UNPINNED"
+            echo ""
+            echo "Consider pinning to a full SHA, e.g.:"
+            echo "  uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4"
+            echo ""
+            echo "This is a warning only — not failing CI. Pin before production use."
+          else
+            echo "All actions are pinned or using major-version tags."
+          fi
