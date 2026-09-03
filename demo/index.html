@@ -642,5 +642,14 @@ vault write -field=plaintext transit/decrypt/cred-rotation-key \
   </p>
 </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  (function () {
+    var forcedTheme = document.documentElement.dataset.theme;
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var isDark = forcedTheme === 'dark' || (!forcedTheme && prefersDark);
+    mermaid.initialize({ startOnLoad: true, theme: isDark ? 'dark' : 'default' });
+  })();
+</script>
 </body>
 </html>
