@@ -1,0 +1,28 @@
+# Local secrets — never commit
+.env
+.vault-env
+*.pid
+
+# Vault data
+vault/data/
+vault/logs/
+vault/plugins/
+
+# Go build output
+bin/
+dist/
+plugins/vault-rest-engine/vault-rest-engine
+plugins/vault-auth0-engine/vault-auth0-engine
+cred-rotation-api/cred-rotation-api
+
+# Go toolchain
+**/vendor/
+**/.go-build-cache/
+
+# macOS
+.DS_Store
+
+# TLS certificates (generated locally)
+vault/certs/*.pem
+vault/certs/*.crt
+vault/certs/*.key
