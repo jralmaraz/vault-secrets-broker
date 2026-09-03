@@ -1,9 +1,9 @@
 GO := /opt/homebrew/bin/go
 VAULT := /opt/homebrew/bin/vault
 
-.PHONY: setup stop status \
+.PHONY: setup setup-phase2 stop status \
         build-rest-engine build-auth0-engine build-api build \
-        test-rest-engine test-auth0-engine test-api test \
+        test-rest-engine test-auth0-engine test-api test test-integration \
         fmt vet
 
 # ── Phase 1: Vault foundation ────────────────────────────────────────────────
@@ -11,6 +11,12 @@ VAULT := /opt/homebrew/bin/vault
 setup:
 	@chmod +x scripts/phase1-setup.sh scripts/stop-vault.sh
 	@./scripts/phase1-setup.sh
+
+# ── Phase 2: cred-rotation-api Vault prerequisites ───────────────────────────
+
+setup-phase2:
+	@chmod +x scripts/phase2-setup.sh
+	@./scripts/phase2-setup.sh
 
 stop:
 	@./scripts/stop-vault.sh
@@ -43,6 +49,9 @@ test-api:
 	cd cred-rotation-api && $(GO) test ./...
 
 test: test-rest-engine test-auth0-engine test-api
+
+test-integration:
+	@source .vault-env && cd cred-rotation-api && $(GO) test -tags=integration -race -v ./vault/...
 
 # ── Lint ─────────────────────────────────────────────────────────────────────
 
