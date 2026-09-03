@@ -1,0 +1,143 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run weekly even if no new commits — picks up newly disclosed CVEs.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write  # required to upload SARIF to GitHub Security tab
+
+jobs:
+  # ── govulncheck — known vulnerabilities in Go dependencies ─────────────────
+  govulncheck:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - plugins/vault-rest-engine
+          - plugins/vault-auth0-engine
+          - cred-rotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Install govulncheck (pinned v1.6.0)
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
+      - name: govulncheck
+        working-directory: ${{ matrix.module }}
+        run: govulncheck ./...
+
+  # ── gosec — static security analysis ───────────────────────────────────────
+  gosec:
+    name: gosec (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - plugins/vault-rest-engine
+          - plugins/vault-auth0-engine
+          - cred-rotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: gosec
+        uses: securego/gosec@master
+        with:
+          # -fmt sarif: upload findings to GitHub Security tab
+          # -severity medium: catch medium+ severity issues
+          # -confidence medium: reduce false positives
+          args: >-
+            -fmt sarif
+            -out gosec-${{ matrix.module == 'cred-rotation-api' && 'api' || matrix.module == 'plugins/vault-rest-engine' && 'rest-engine' || 'auth0-engine' }}.sarif
+            -severity medium
+            -confidence medium
+            ./...
+          working-directory: ${{ matrix.module }}
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ matrix.module }}/gosec-${{ matrix.module == 'cred-rotation-api' && 'api' || matrix.module == 'plugins/vault-rest-engine' && 'rest-engine' || 'auth0-engine' }}.sarif
+
+  # ── CodeQL — semantic analysis ──────────────────────────────────────────────
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          # Use the security-extended query suite for broader coverage.
+          queries: security-extended
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cred-rotation-api/go.mod
+
+      # Build all modules so CodeQL can trace the full call graph.
+      - name: Build all modules
+        run: |
+          cd plugins/vault-rest-engine  && go build ./... && cd -
+          cd plugins/vault-auth0-engine && go build ./... && cd -
+          cd cred-rotation-api          && go build ./... && cd -
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
+
+  # ── Vault policy lint — HCL syntax validation ───────────────────────────────
+  vault-policy-lint:
+    name: Vault policy lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vault
+        run: |
+          wget -q -O vault.zip \
+            "https://releases.hashicorp.com/vault/2.0.4/vault_2.0.4_linux_amd64.zip"
+          unzip -q vault.zip
+          sudo mv vault /usr/local/bin/vault
+          vault version
+
+      - name: Lint HCL policies
+        run: |
+          echo "Checking vault/policies/*.hcl for syntax errors..."
+          for f in vault/policies/*.hcl; do
+            echo "  → $f"
+            vault policy fmt "$f"
+            git diff --exit-code "$f" || {
+              echo "Policy $f is not formatted. Run: vault policy fmt $f"
+              exit 1
+            }
+          done
+          echo "All policies are syntactically valid and formatted."

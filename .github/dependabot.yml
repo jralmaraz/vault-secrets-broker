@@ -1,0 +1,47 @@
+version: 2
+updates:
+  # Each Go module has its own go.mod — Dependabot must be configured per directory.
+
+  - package-ecosystem: "gomod"
+    directory: "/plugins/vault-rest-engine"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "vault-rest-engine"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "gomod"
+    directory: "/plugins/vault-auth0-engine"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "vault-auth0-engine"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "gomod"
+    directory: "/cred-rotation-api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "cred-rotation-api"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(ci)"

@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vault Secrets Broker</title>
+<style>
+/* ── Reset + tokens ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0c0f1a;
+  --surface:   #131826;
+  --surface2:  #1a2133;
+  --surface3:  #212942;
+  --border:    #2a3450;
+  --text:      #e2e8f8;
+  --text-dim:  #8fa3cc;
+  --muted:     #566080;
+
+  --purple:    #7c5cfc;
+  --purple-lt: rgba(124,92,252,.14);
+  --cyan:      #22d3ee;
+  --cyan-lt:   rgba(34,211,238,.1);
+  --green:     #34d399;
+  --green-lt:  rgba(52,211,153,.1);
+  --amber:     #fbbf24;
+  --amber-lt:  rgba(251,191,36,.1);
+  --red:       #f87171;
+
+  --mono: "SF Mono","Cascadia Code","Fira Code",Menlo,monospace;
+  --shadow: 0 4px 24px rgba(0,0,0,.5);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:#f4f6fd; --surface:#fff; --surface2:#edf0fb; --surface3:#e4e9f5;
+    --border:#d0d8f0; --text:#0f1729; --text-dim:#3d4f7a; --muted:#7b8ab2;
+    --purple:#5b3ee8; --purple-lt:rgba(91,62,232,.08);
+    --cyan:#0891b2; --cyan-lt:rgba(8,145,178,.08);
+    --green:#059669; --green-lt:rgba(5,150,105,.08);
+    --amber:#d97706; --amber-lt:rgba(217,119,6,.08);
+    --red:#dc2626; --shadow:0 4px 24px rgba(0,0,0,.08);
+  }
+}
+:root[data-theme="light"] {
+  --bg:#f4f6fd; --surface:#fff; --surface2:#edf0fb; --surface3:#e4e9f5;
+  --border:#d0d8f0; --text:#0f1729; --text-dim:#3d4f7a; --muted:#7b8ab2;
+  --purple:#5b3ee8; --purple-lt:rgba(91,62,232,.08);
+  --cyan:#0891b2; --cyan-lt:rgba(8,145,178,.08);
+  --green:#059669; --green-lt:rgba(5,150,105,.08);
+  --amber:#d97706; --amber-lt:rgba(217,119,6,.08);
+  --red:#dc2626; --shadow:0 4px 24px rgba(0,0,0,.08);
+}
+
+body { background: var(--bg); color: var(--text); font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; line-height:1.7; }
+
+/* ── Header ── */
+.site-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 32px;
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 16px; height: 56px;
+}
+.logo { font-size: 13px; font-weight: 800; color: var(--text); letter-spacing: -.01em; }
+.logo span { color: var(--purple); }
+.header-badges { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 99px; white-space: nowrap; }
+.badge-purple { background: var(--purple-lt); color: var(--purple); }
+.badge-cyan   { background: var(--cyan-lt);   color: var(--cyan); }
+.badge-green  { background: var(--green-lt);  color: var(--green); }
+.badge-amber  { background: var(--amber-lt);  color: var(--amber); }
+
+/* ── Hero ── */
+.hero {
+  max-width: 900px; margin: 0 auto; padding: 64px 24px 48px;
+  text-align: center;
+}
+.hero-eyebrow {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--purple); margin-bottom: 16px;
+}
+.hero-title {
+  font-size: clamp(26px,4vw,42px); font-weight: 900; line-height: 1.1;
+  color: var(--text); text-wrap: balance; margin-bottom: 20px;
+}
+.hero-title .hl { color: var(--purple); }
+.hero-sub {
+  font-size: 16px; color: var(--text-dim); max-width: 640px; margin: 0 auto 32px; line-height: 1.7;
+}
+.hero-cta {
+  display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  text-decoration: none; transition: opacity .15s;
+}
+.btn:hover { opacity: .85; }
+.btn-primary { background: var(--purple); color: #fff; }
+.btn-outline { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+
+/* ── Problem callout ── */
+.problem-strip {
+  background: rgba(248,113,113,.06);
+  border-top: 1px solid rgba(248,113,113,.2);
+  border-bottom: 1px solid rgba(248,113,113,.2);
+  padding: 20px 24px;
+  text-align: center;
+  font-size: 14px; color: var(--text-dim);
+}
+.problem-strip strong { color: var(--red); }
+
+/* ── Main layout ── */
+.main { max-width: 1020px; margin: 0 auto; padding: 48px 24px 100px; }
+section { margin-bottom: 56px; }
+h2 {
+  font-size: 17px; font-weight: 800; color: var(--text);
+  margin-bottom: 20px; padding-left: 12px;
+  border-left: 3px solid var(--purple);
+}
+
+/* ── KV vs Dynamic table ── */
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width:600px) { .compare-grid { grid-template-columns:1fr; } }
+.compare-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px;
+  box-shadow: var(--shadow);
+}
+.compare-card.bad  { border-top: 3px solid var(--red); }
+.compare-card.good { border-top: 3px solid var(--green); }
+.compare-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing:.08em; margin-bottom: 12px; }
+.compare-card.bad  .compare-label { color: var(--red); }
+.compare-card.good .compare-label { color: var(--green); }
+.compare-item { display: flex; gap: 8px; font-size: 13px; color: var(--text-dim); margin-bottom: 6px; align-items: flex-start; }
+.compare-item .ic { flex-shrink: 0; margin-top: 1px; }
+
+/* ── Arch diagram ── */
+.diagram-wrap {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px; overflow-x: auto; box-shadow: var(--shadow);
+}
+.diagram-caption { font-size: 11px; color: var(--muted); text-align: center; margin-top: 12px; }
+
+/* ── Security layers ── */
+.sec-stack { }
+.sec-layer {
+  display: flex; gap: 16px; align-items: flex-start;
+  padding: 14px 18px;
+  border: 1px solid var(--border); border-radius: 0; background: var(--surface);
+  margin-bottom: -1px;
+}
+.sec-layer:first-child { border-radius: 8px 8px 0 0; }
+.sec-layer:last-child  { border-radius: 0 0 8px 8px; margin-bottom: 0; }
+.sec-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+.sec-layer strong { color: var(--text); font-size: 14px; min-width: 200px; }
+.sec-layer p { font-size: 13px; color: var(--text-dim); margin: 0; }
+
+/* ── API contract ── */
+.api-endpoint {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 18px; display: flex; gap: 14px; align-items: flex-start;
+  margin-bottom: 8px;
+}
+.method { font-family: var(--mono); font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; flex-shrink: 0; margin-top: 1px; }
+.method-post { background: var(--purple-lt); color: var(--purple); }
+.method-get  { background: var(--green-lt);  color: var(--green); }
+.api-path    { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text); }
+.api-desc    { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
+
+/* ── Phase tracker ── */
+.phase-list { display: flex; flex-direction: column; gap: 0; }
+.phase-item {
+  display: flex; gap: 16px; padding: 14px 18px;
+  border: 1px solid var(--border); background: var(--surface);
+  margin-bottom: -1px;
+}
+.phase-item:first-child { border-radius: 8px 8px 0 0; }
+.phase-item:last-child  { border-radius: 0 0 8px 8px; margin-bottom: 0; }
+.phase-num {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; margin-top: 1px;
+}
+.p-done    { background: var(--green-lt); color: var(--green); }
+.p-next    { background: var(--purple-lt); color: var(--purple); }
+.p-planned { background: var(--surface2); color: var(--muted); }
+.phase-title { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+.phase-desc  { font-size: 12.5px; color: var(--text-dim); }
+.phase-tags  { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 99px; background: var(--surface2); color: var(--muted); }
+
+/* ── AuthZEN parallel ── */
+.parallel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width:600px) { .parallel-grid { grid-template-columns:1fr; } }
+.parallel-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-top: 2px solid var(--cyan); border-radius: 8px; padding: 18px;
+}
+.parallel-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing:.07em; color: var(--cyan); margin-bottom: 10px; }
+.parallel-card code { font-family: var(--mono); font-size: 12px; color: var(--text-dim); display: block; margin: 3px 0; }
+.parallel-card p { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+
+/* ── Code block ── */
+pre.code-block {
+  font-family: var(--mono); font-size: 12px; line-height: 1.7;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px 20px; overflow-x: auto; white-space: pre; color: var(--text-dim);
+}
+.cm { color: var(--muted); font-style: italic; }
+.ck { color: #79c0ff; }
+.cs { color: #a8c7fa; }
+.cn { color: #ffa657; }
+.cb { color: var(--green); }
+
+/* ── Callout ── */
+.callout {
+  border-radius: 8px; padding: 12px 16px; display: flex; gap: 10px;
+  align-items: flex-start; font-size: 13px; line-height: 1.65;
+}
+.callout-purple { background: var(--purple-lt); border-left: 3px solid var(--purple); }
+.callout-green  { background: var(--green-lt);  border-left: 3px solid var(--green); }
+.callout-amber  { background: var(--amber-lt);  border-left: 3px solid var(--amber); }
+.callout .ic { flex-shrink: 0; margin-top: 1px; }
+.callout strong { color: var(--text); }
+.callout p { color: var(--text-dim); margin: 0; }
+
+/* ── Footer ── */
+footer {
+  border-top: 1px solid var(--border); text-align: center;
+  padding: 24px; font-size: 12px; color: var(--muted);
+}
+footer a { color: var(--purple); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header class="site-header">
+  <div class="logo">vault<span>·</span>secrets<span>·</span>broker</div>
+  <div class="header-badges">
+    <span class="badge badge-purple">Go 1.26</span>
+    <span class="badge badge-cyan">Vault 2.1+</span>
+    <span class="badge badge-green">Transit AES-256-GCM96</span>
+    <span class="badge badge-amber">PoC</span>
+  </div>
+</header>
+
+<!-- ── Hero ── -->
+<section class="hero">
+  <div class="hero-eyebrow">HashiCorp Vault · Custom Plugin Architecture</div>
+  <h1 class="hero-title">
+    Genuine Credential Rotation<br>
+    <span class="hl">Not Just Storage</span>
+  </h1>
+  <p class="hero-sub">
+    A proof of concept demonstrating that Vault can rotate API credentials for SaaS providers
+    in real-time — calling their APIs, revoking old credentials on expiry, and protecting
+    credential values in transit with Transit envelope encryption and mTLS.
+  </p>
+  <div class="hero-cta">
+    <a class="btn btn-primary" href="https://github.com/jralmaraz/vault-secrets-broker">View on GitHub</a>
+    <a class="btn btn-outline" href="https://github.com/jralmaraz/vault-secrets-broker/blob/main/README.md">Full Documentation</a>
+  </div>
+</section>
+
+<!-- ── Problem strip ── -->
+<div class="problem-strip">
+  <strong>The KV misconception:</strong> Vault's KV engine stores secrets. It does not know how to call Auth0, Splunk, or SonarQube. When a KV-stored credential expires in Vault, <strong>the actual credential on the SaaS side remains valid indefinitely.</strong> A custom secrets engine changes this.
+</div>
+
+<!-- ── Main ── -->
+<main class="main">
+
+  <!-- KV vs Dynamic comparison -->
+  <section>
+    <h2>KV Engine vs Dynamic Secrets Engine</h2>
+    <div class="compare-grid">
+      <div class="compare-card bad">
+        <div class="compare-label">KV Secrets Engine (storage only)</div>
+        <div class="compare-item"><span class="ic">✅</span> Stores the credential securely</div>
+        <div class="compare-item"><span class="ic">✅</span> Audits every read/write</div>
+        <div class="compare-item"><span class="ic">✅</span> Enforces TTL on Vault's copy</div>
+        <div class="compare-item"><span class="ic">❌</span> Does NOT call Auth0/Splunk/any API</div>
+        <div class="compare-item"><span class="ic">❌</span> Old credential stays valid on the SaaS side</div>
+        <div class="compare-item"><span class="ic">❌</span> No revocation on lease expiry</div>
+        <div class="compare-item"><span class="ic">❌</span> Leaked credential remains usable indefinitely</div>
+      </div>
+      <div class="compare-card good">
+        <div class="compare-label">Dynamic Secrets Engine (this PoC) ✓</div>
+        <div class="compare-item"><span class="ic">✅</span> Calls the target API to create a new credential</div>
+        <div class="compare-item"><span class="ic">✅</span> Returns short-lived dynamic credential with TTL</div>
+        <div class="compare-item"><span class="ic">✅</span> On lease expiry: calls API to revoke the credential</div>
+        <div class="compare-item"><span class="ic">✅</span> Credential lifetime fully managed end-to-end</div>
+        <div class="compare-item"><span class="ic">✅</span> Leaked credential is automatically expired and revoked</div>
+        <div class="compare-item"><span class="ic">✅</span> No long-lived static secrets</div>
+        <div class="compare-item"><span class="ic">✅</span> Transit-encrypted in transit between components</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section>
+    <h2>Architecture</h2>
+    <div class="diagram-wrap">
+<pre class="mermaid">flowchart TB
+    subgraph consumers["Applications / Consumers"]
+        app1["App A\nvault read generic/creds/my-role"]
+        app2["App B\nvault read auth0/creds/my-role"]
+    end
+
+    subgraph vault["HashiCorp Vault 2.1+ · TLS :8200"]
+        engine1["vault-rest-engine\n(Generic REST Plugin)"]
+        engine3["vault-auth0-engine\n(Auth0 Native Plugin)"]
+        transit["Transit Engine\ncred-rotation-key\naes256-gcm96"]
+        pki["PKI Engine\nInternal CA"]
+        kv["KV v2\nTransit-encrypted\nadapter config"]
+    end
+
+    subgraph broker["Credential Rotation API · mTLS :8443"]
+        direction LR
+        a0["Auth0\nAdapter"]
+        sp["Splunk\nAdapter"]
+        sq["SonarQube\nAdapter"]
+    end
+
+    subgraph saas["SaaS Providers · TLS"]
+        auth0["Auth0\nMgmt API"]
+        splunk["Splunk\nREST API"]
+        sonar["SonarQube\nWeb API"]
+    end
+
+    app1 -- "TLS" --> engine1
+    app2 -- "TLS" --> engine3
+    engine1 -- "mTLS\nclient cert from PKI" --> a0
+    engine3 -- "TLS" --> auth0
+    a0 -- "TLS" --> auth0
+    sp -- "TLS" --> splunk
+    sq -- "TLS" --> sonar
+    engine1 & broker -- "Transit encrypt/decrypt\nenvelope encryption" --> transit
+    broker -- "Transit-decrypt\nadapter config" --> kv
+    pki -- "issues client cert\nfor vault-rest-engine" --> engine1</pre>
+      <div class="diagram-caption">Component 1 (vault-rest-engine) calls Component 2 (Credential Rotation API) over mTLS. Adding a new SaaS provider requires only a new adapter in Component 2 — zero plugin changes.</div>
+    </div>
+  </section>
+
+  <!-- The AuthZEN Parallel -->
+  <section>
+    <h2>The AuthZEN Pattern Parallel</h2>
+    <p style="font-size:14px;color:var(--text-dim);margin-bottom:14px">
+      Just as <a href="https://openid.net/wg/authzen/" style="color:var(--purple)">AuthZEN</a> standardises the authorization decision interface so any PDP can implement it, the Credential Rotation API standardises the credential lifecycle interface so any SaaS adapter can implement it.
+    </p>
+    <div class="parallel-grid">
+      <div class="parallel-card">
+        <div class="parallel-label">AuthZEN — authorization decisions</div>
+        <code>POST /access/v1/evaluation</code>
+        <code>{ subject, resource, action, context }</code>
+        <code>→ { decision: bool }</code>
+        <p>Any PDP implements this contract. Callers don't know if it's OPA, OpenFGA, or an in-memory PDP.</p>
+      </div>
+      <div class="parallel-card">
+        <div class="parallel-label">CredentialBroker — credential lifecycle</div>
+        <code>POST /v1/credentials/rotate</code>
+        <code>{ provider, resource_id, lease_id }</code>
+        <code>→ { encrypted_value, expires_at }</code>
+        <p>Any SaaS adapter implements this contract. Vault doesn't know if it's Auth0, Splunk, or SonarQube.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Security model -->
+  <section>
+    <h2>Security Model — Defence in Depth</h2>
+    <div class="sec-stack" style="margin-bottom:16px">
+      <div class="sec-layer">
+        <div class="sec-dot" style="background:var(--red)"></div>
+        <div>
+          <strong>Layer 1 — TLS 1.3</strong>
+          <p>All Vault API traffic (consumer → Vault). Enforced by Vault; cannot be disabled in production mode.</p>
+        </div>
+      </div>
+      <div class="sec-layer">
+        <div class="sec-dot" style="background:var(--amber)"></div>
+        <div>
+          <strong>Layer 2 — Mutual TLS (mTLS)</strong>
+          <p>Plugin → Credential Rotation API. Both sides present certificates. API rejects any client without a cert signed by the internal PKI CA. The cert IS the plugin's identity — no bearer tokens.</p>
+        </div>
+      </div>
+      <div class="sec-layer">
+        <div class="sec-dot" style="background:var(--purple)"></div>
+        <div>
+          <strong>Layer 3 — Transit Envelope Encryption (credential values in motion)</strong>
+          <p>New credentials are Transit-encrypted by the API before being sent to the plugin over mTLS. Each rotate call generates a unique DEK (AES-256-GCM) — the same credential rotated twice produces two unrelated ciphertexts. Correlation and replay attacks blocked at the envelope level.</p>
+        </div>
+      </div>
+      <div class="sec-layer">
+        <div class="sec-dot" style="background:var(--cyan)"></div>
+        <div>
+          <strong>Layer 4 — Transit Envelope Encryption (adapter config at rest)</strong>
+          <p>SaaS adapter credentials (Auth0 mgmt secret, Splunk token) stored in KV encrypted via Transit. The KV backend at rest cannot be read without the Transit master key. Plaintext credentials never touch Vault storage.</p>
+        </div>
+      </div>
+      <div class="sec-layer">
+        <div class="sec-dot" style="background:var(--green)"></div>
+        <div>
+          <strong>Layer 5 — Vault Storage Encryption</strong>
+          <p>Vault's backend storage (Raft) is always encrypted with Vault's own seal key. This baseline applies even before Transit adds its layer.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout callout-green">
+      <span class="ic">🔒</span>
+      <div>
+        <strong>Credential never plaintext at rest.</strong>
+        <p>The plaintext credential exists only: (1) in the SaaS API's TLS response at the adapter, and (2) in the Vault plugin's process memory immediately before returning to the consumer. It is never logged, never stored in KV, never written to disk.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Credential rotation flow -->
+  <section>
+    <h2>Credential Rotation Flow</h2>
+    <div class="diagram-wrap">
+<pre class="mermaid">sequenceDiagram
+    participant App as Consumer App
+    participant Vault as HashiCorp Vault
+    participant Plugin as vault-rest-engine
+    participant Transit as Transit Engine
+    participant API as cred-rotation-api
+    participant Auth0 as Auth0 Mgmt API
+
+    App->>Vault: vault read generic/creds/my-role (TLS)
+    Vault->>Plugin: dispatch to plugin process (gRPC + mTLS)
+    Plugin->>API: POST /v1/credentials/rotate (mTLS + client cert)
+    API->>Auth0: POST /api/v2/clients/{id}/rotate-secret (TLS)
+    Auth0-->>API: new_client_secret (plaintext, in TLS channel)
+    API->>Transit: POST /v1/transit/encrypt/cred-rotation-key
+    Note over API,Transit: Envelope encryption — unique DEK per call
+    Transit-->>API: vault:v1:AbC123... (ciphertext)
+    API-->>Plugin: { encrypted_value: "vault:v1:AbC123..." } (mTLS)
+    Note over API,Plugin: plaintext never leaves API unencrypted
+    Plugin->>Transit: POST /v1/transit/decrypt/cred-rotation-key
+    Transit-->>Plugin: plaintext new_secret (in plugin memory only)
+    Plugin-->>Vault: { secret_value, lease_id, ttl: 86400 }
+    Vault-->>App: secret (TLS)</pre>
+      <div class="diagram-caption">On Vault lease expiry, the plugin calls <code>POST /v1/credentials/revoke</code> — Auth0 immediately invalidates the old credential.</div>
+    </div>
+  </section>
+
+  <!-- API Contract -->
+  <section>
+    <h2>Credential Rotation API Contract</h2>
+    <div class="api-endpoint">
+      <span class="method method-post">POST</span>
+      <div>
+        <div class="api-path">/v1/credentials/rotate</div>
+        <div class="api-desc">Generate a new credential on the target system. Returns the value Transit-encrypted. Body: <code style="font-family:var(--mono);font-size:11px;color:var(--cyan)">{ provider, resource_id, lease_id, context? }</code></div>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="method method-post">POST</span>
+      <div>
+        <div class="api-path">/v1/credentials/revoke</div>
+        <div class="api-desc">Invalidate a previously issued credential on the target system. Called by Vault on lease expiry. Body: <code style="font-family:var(--mono);font-size:11px;color:var(--cyan)">{ provider, resource_id, lease_id, credential_id }</code></div>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="method method-get">GET</span>
+      <div>
+        <div class="api-path">/v1/credentials/status/{lease_id}</div>
+        <div class="api-desc">Check if a credential is still valid on the target system. Does not expose the credential value. Used for debugging rotation failures.</div>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="method method-get">GET</span>
+      <div>
+        <div class="api-path">/v1/health</div>
+        <div class="api-desc">Liveness + readiness. Returns per-adapter connectivity status. Vault plugin can refuse to serve credentials if the API reports unhealthy.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Phase tracker -->
+  <section>
+    <h2>Implementation Phases</h2>
+    <div class="phase-list">
+      <div class="phase-item">
+        <div class="phase-num p-done">✓</div>
+        <div>
+          <div class="phase-title">Phase 1 — Vault Foundation</div>
+          <div class="phase-desc">Vault dev server, PKI engine (internal CA), Transit engine (cred-rotation-key, aes256-gcm96), KV v2 with Transit-encrypted Auth0 adapter config, AppRole auth, least-privilege policies.</div>
+          <div class="phase-tags">
+            <span class="tag">vault server -dev</span>
+            <span class="tag">PKI · Transit · AppRole · KV v2</span>
+            <span class="tag">scripts/phase1-setup.sh</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-item">
+        <div class="phase-num p-next">2</div>
+        <div>
+          <div class="phase-title">Phase 2 — Credential Rotation API</div>
+          <div class="phase-desc">Go mTLS server with client certificate validation, Adapter interface, Auth0 adapter (POST /api/v2/clients/{id}/rotate-secret), Transit-encrypted config loading at startup.</div>
+          <div class="phase-tags">
+            <span class="tag">cred-rotation-api</span>
+            <span class="tag">mTLS server</span>
+            <span class="tag">Auth0 adapter</span>
+            <span class="tag">Transit decrypt on boot</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-item">
+        <div class="phase-num p-planned">3</div>
+        <div>
+          <div class="phase-title">Phase 3 — Generic REST Secrets Engine</div>
+          <div class="phase-desc">Custom Vault plugin (vault-rest-engine) using Vault Plugin SDK. config / roles / creds paths, mTLS call to Credential Rotation API, lease management with revocation callback, SHA256-pinned binary registration.</div>
+          <div class="phase-tags">
+            <span class="tag">vault-rest-engine</span>
+            <span class="tag">Vault Plugin SDK</span>
+            <span class="tag">lease management</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-item">
+        <div class="phase-num p-planned">4</div>
+        <div>
+          <div class="phase-title">Phase 4 — Auth0-native Secrets Engine</div>
+          <div class="phase-desc">vault-auth0-engine plugin: same SDK structure but calls Auth0 Management API directly (no intermediate API hop). Comparison with Phase 2+3 approach shows the trade-off between flexibility and efficiency.</div>
+          <div class="phase-tags">
+            <span class="tag">vault-auth0-engine</span>
+            <span class="tag">Auth0 Mgmt API direct</span>
+            <span class="tag">comparison study</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-item">
+        <div class="phase-num p-planned">5</div>
+        <div>
+          <div class="phase-title">Phase 5 — Splunk + SonarQube Adapters</div>
+          <div class="phase-desc">Add two adapters to cred-rotation-api. Zero changes to Vault plugins. This is the key demonstration of the abstraction layer value: new SaaS providers with no plugin work.</div>
+          <div class="phase-tags">
+            <span class="tag">Splunk adapter</span>
+            <span class="tag">SonarQube adapter</span>
+            <span class="tag">zero plugin changes</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-item">
+        <div class="phase-num p-planned">6</div>
+        <div>
+          <div class="phase-title">Phase 6 — Hardening + Demo Narrative</div>
+          <div class="phase-desc">Circuit breaker, rotation failure handling (mid-flight revoke + new credential failure), audit log review, demo script showing the KV misconception in action and the full rotation lifecycle.</div>
+          <div class="phase-tags">
+            <span class="tag">circuit breaker</span>
+            <span class="tag">audit log</span>
+            <span class="tag">demo script</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick start -->
+  <section>
+    <h2>Quick Start</h2>
+    <div class="callout callout-amber" style="margin-bottom:16px">
+      <span class="ic">⚠️</span>
+      <div>
+        <strong>Prerequisites:</strong>
+        <p>Go 1.26+, Vault 2.1+ (<code style="font-family:var(--mono);font-size:11px">brew install hashicorp/tap/vault</code>), an Auth0 dev tenant with a Management API M2M application.</p>
+      </div>
+    </div>
+<pre class="code-block"><span class="cm"># Clone and configure</span>
+git clone https://github.com/jralmaraz/vault-secrets-broker.git
+cd vault-secrets-broker
+cp .env.example .env
+<span class="cm"># edit .env with your Auth0 tenant credentials</span>
+
+<span class="cm"># Run Phase 1 — starts Vault and configures all engines</span>
+make setup
+
+<span class="cm"># Load the Vault environment</span>
+source .vault-env
+
+<span class="cm"># Verify the Auth0 client_secret is Transit-encrypted (not plaintext)</span>
+vault kv get secret/cred-rotation-api/adapters/auth0
+<span class="cm"># mgmt_client_secret_encrypted = vault:v1:...  ← ciphertext ✓</span>
+
+<span class="cm"># Verify Transit decrypt round-trip</span>
+CIPHER=$(vault kv get -field=mgmt_client_secret_encrypted \
+  secret/cred-rotation-api/adapters/auth0)
+vault write -field=plaintext transit/decrypt/cred-rotation-key \
+  ciphertext="$CIPHER" | base64 -d
+<span class="cm"># → your original client_secret ✓</span></pre>
+  </section>
+
+  <!-- Supply chain -->
+  <section>
+    <h2>Supply Chain Security</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);margin-bottom:8px">go mod verify</div>
+        <div style="font-size:12.5px;color:var(--text-dim)">Every CI run cryptographically verifies all dependencies against <code style="font-family:var(--mono);font-size:11px">go.sum</code>. Tampered modules fail immediately.</div>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);margin-bottom:8px">govulncheck v1.6.0</div>
+        <div style="font-size:12.5px;color:var(--text-dim)">Scans the actual call graph for reachable vulnerabilities from the Go vuln database. Runs weekly even without new commits.</div>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);margin-bottom:8px">gosec + CodeQL</div>
+        <div style="font-size:12.5px;color:var(--text-dim)">Static security analysis: hardcoded credentials, TLS misconfig, weak crypto, unsafe random. SARIF results in GitHub Security → Code Scanning.</div>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);margin-bottom:8px">SBOM (CycloneDX)</div>
+        <div style="font-size:12.5px;color:var(--text-dim)">Software Bill of Materials generated per module on every main push. 90-day retention. Used for license compliance and CVE impact assessment.</div>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);margin-bottom:8px">Dependency Review</div>
+        <div style="font-size:12.5px;color:var(--text-dim)">PRs that introduce dependencies with CVSS ≥ 4.0 or non-OSI licenses are blocked before merge.</div>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);margin-bottom:8px">Dependabot</div>
+        <div style="font-size:12.5px;color:var(--text-dim)">Weekly automatic PRs for all 3 Go modules + GitHub Actions. Each Dependabot PR triggers full CI + security scan.</div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    <a href="https://github.com/jralmaraz/vault-secrets-broker">github.com/jralmaraz/vault-secrets-broker</a>
+    &nbsp;·&nbsp; Vault 2.1+ &nbsp;·&nbsp; Go 1.26 &nbsp;·&nbsp; PoC — not production hardened
+  </p>
+</footer>
+
+</body>
+</html>
