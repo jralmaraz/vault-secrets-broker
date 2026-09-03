@@ -74,7 +74,7 @@ jobs:
           working-directory: ${{ matrix.module }}
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: ${{ matrix.module }}/gosec-${{ matrix.module == 'cred-rotation-api' && 'api' || matrix.module == 'plugins/vault-rest-engine' && 'rest-engine' || 'auth0-engine' }}.sarif
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: go
           # Use the security-extended query suite for broader coverage.
@@ -110,7 +110,7 @@ jobs:
           cd cred-rotation-api          && go build ./... && cd -
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:go"
 
