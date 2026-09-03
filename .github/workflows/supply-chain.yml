@@ -17,7 +17,7 @@ jobs:
     # Only runs on PRs — compares base vs head for new vulnerable dependencies.
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Dependency review
         uses: actions/dependency-review-action@v4
@@ -41,7 +41,7 @@ jobs:
           - cred-rotation-api
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod
@@ -85,7 +85,7 @@ jobs:
             name: cred-rotation-api
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod
@@ -111,7 +111,7 @@ jobs:
     name: Action pin check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for unpinned actions (mutable tags)
         run: |
