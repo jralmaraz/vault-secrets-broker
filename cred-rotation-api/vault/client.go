@@ -156,7 +156,7 @@ func fetchSPIFFEJWT(ctx context.Context, socketAddr, audience string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("SPIFFE: connect to workload API at %s: %w", socketAddr, err)
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	svid, err := source.FetchJWTSVID(ctx, jwtsvid.Params{Audience: audience})
 	if err != nil {
