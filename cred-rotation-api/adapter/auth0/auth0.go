@@ -100,7 +100,7 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 	if err != nil {
 		return adapter.Result{}, fmt.Errorf("auth0 rotate: http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
@@ -149,7 +149,7 @@ func (a *Adapter) Status(ctx context.Context, credentialID string) (adapter.Cred
 	if err != nil {
 		return adapter.CredentialStatus{}, fmt.Errorf("auth0 status: http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	active := resp.StatusCode == http.StatusOK
 	return adapter.CredentialStatus{

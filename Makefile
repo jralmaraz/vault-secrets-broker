@@ -63,10 +63,19 @@ hooks:
 
 # install-tools: installs required (govulncheck) and optional (golangci-lint) tools.
 # Run once after cloning, then 'make hooks' to activate the pre-push gate.
+GOLANGCI_VERSION := v2.13.2
+
 install-tools:
 	$(GO) install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 	@echo "govulncheck installed."
-	@echo "Optional: install golangci-lint from https://golangci-lint.run/welcome/install/"
+	@if command -v brew >/dev/null 2>&1; then \
+	  brew install golangci-lint; \
+	else \
+	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+	    | sh -s -- -b $$($(GO) env GOPATH)/bin $(GOLANGCI_VERSION); \
+	fi
+	@echo "golangci-lint installed."
+	@echo "Run 'make hooks' to activate the pre-push gate."
 
 # ── Lint / quality ────────────────────────────────────────────────────────────
 
