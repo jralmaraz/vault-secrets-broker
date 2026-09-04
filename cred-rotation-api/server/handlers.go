@@ -3,11 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
-	"unicode"
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 	vclient "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/vault"
@@ -59,7 +58,7 @@ func (h *Handlers) Rotate(w http.ResponseWriter, r *http.Request) {
 		Meta:       req.Meta,
 	})
 	if err != nil {
-		h.logger.Error("adapter rotate failed", "provider", sanitize(req.Provider), "err", sanitize(err.Error()))
+		h.logger.Error("adapter rotate failed", "provider", fmt.Sprintf("%.64q", req.Provider), "err", fmt.Sprintf("%.256q", err.Error()))
 		h.jsonError(w, http.StatusBadGateway, "rotation failed: "+err.Error())
 		return
 	}
@@ -67,7 +66,7 @@ func (h *Handlers) Rotate(w http.ResponseWriter, r *http.Request) {
 	// Transit-encrypt the plaintext credential. result.Credential is discarded after this.
 	ciphertext, err := h.vaultClient.TransitEncrypt(ctx, h.transitKeyName, result.Credential)
 	if err != nil {
-		h.logger.Error("transit encrypt failed", "provider", sanitize(req.Provider), "err", sanitize(err.Error()))
+		h.logger.Error("transit encrypt failed", "provider", fmt.Sprintf("%.64q", req.Provider), "err", fmt.Sprintf("%.256q", err.Error()))
 		h.jsonError(w, http.StatusInternalServerError, "encryption failed")
 		return
 	}
@@ -111,7 +110,7 @@ func (h *Handlers) Revoke(w http.ResponseWriter, r *http.Request) {
 		ProviderID:   req.ProviderID,
 		CredentialID: req.CredentialID,
 	}); err != nil {
-		h.logger.Error("adapter revoke failed", "provider", sanitize(req.Provider), "err", sanitize(err.Error()))
+		h.logger.Error("adapter revoke failed", "provider", fmt.Sprintf("%.64q", req.Provider), "err", fmt.Sprintf("%.256q", err.Error()))
 		h.jsonError(w, http.StatusBadGateway, "revocation failed: "+err.Error())
 		return
 	}
@@ -139,7 +138,7 @@ func (h *Handlers) Status(w http.ResponseWriter, r *http.Request) {
 
 	status, err := a.Status(ctx, credentialID)
 	if err != nil {
-		h.logger.Error("adapter status failed", "provider", sanitize(provider), "err", sanitize(err.Error()))
+		h.logger.Error("adapter status failed", "provider", fmt.Sprintf("%.64q", provider), "err", fmt.Sprintf("%.256q", err.Error()))
 		h.jsonError(w, http.StatusBadGateway, "status check failed: "+err.Error())
 		return
 	}
@@ -165,14 +164,3 @@ func (h *Handlers) jsonError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-// sanitize strips control characters from a string before it is included in a
-// log entry. This prevents log-injection attacks where user-controlled input
-// containing newlines or ANSI sequences could forge additional log lines.
-func sanitize(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return '_'
-		}
-		return r
-	}, s)
-}

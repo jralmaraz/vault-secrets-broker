@@ -45,7 +45,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # cache-dependency-path omitted — setup-go auto-detects go.sum;
+          # specifying it fails for modules without dependencies (no go.sum).
 
       - name: go mod verify
         working-directory: ${{ matrix.module }}
@@ -59,10 +60,11 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum || {
-            echo "go.mod/go.sum not in sync — run 'go mod tidy' and commit."
-            exit 1
-          }
+          # Check go.mod for drift; check go.sum only if it's tracked by git.
+          git diff --exit-code go.mod || { echo "go.mod not in sync — run 'go mod tidy'"; exit 1; }
+          if git ls-files --error-unmatch go.sum 2>/dev/null; then
+            git diff --exit-code go.sum || { echo "go.sum not in sync — run 'go mod tidy'"; exit 1; }
+          fi
 
   # ── SBOM generation — software bill of materials per module ─────────────────
   sbom:
@@ -89,7 +91,6 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: Generate SBOM (CycloneDX)
         uses: anchore/sbom-action@v0

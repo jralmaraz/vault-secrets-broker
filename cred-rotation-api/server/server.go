@@ -10,9 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"time"
-	"unicode"
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 	vclient "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/vault"
@@ -132,9 +130,9 @@ func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 		logger.Info("request",
 			"method", r.Method,
-			"path", sanitizeLog(r.URL.Path),
+			"path", fmt.Sprintf("%q", r.URL.Path),
 			"status", rw.statusCode,
-			"remote", sanitizeLog(r.RemoteAddr),
+			"remote", fmt.Sprintf("%q", r.RemoteAddr),
 		)
 	})
 }
@@ -147,17 +145,6 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
-}
-
-// sanitizeLog strips control characters from a string before including it in a
-// log entry to prevent log-injection attacks.
-func sanitizeLog(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return '_'
-		}
-		return r
-	}, s)
 }
 
 func listenerAddr(ln net.Listener) string {

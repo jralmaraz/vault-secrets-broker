@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # cache-dependency-path omitted — auto-detected; specifying it fails for modules without go.sum.
 
       # Verify the module graph is consistent with go.sum before doing anything else.
       # This is a supply-chain guard: tampered modules will not match the recorded hashes.
@@ -42,10 +42,10 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum || {
-            echo "go.mod/go.sum are not tidy — run 'go mod tidy' and commit."
-            exit 1
-          }
+          git diff --exit-code go.mod || { echo "go.mod not in sync — run 'go mod tidy'"; exit 1; }
+          if git ls-files --error-unmatch go.sum 2>/dev/null; then
+            git diff --exit-code go.sum || { echo "go.sum not in sync — run 'go mod tidy'"; exit 1; }
+          fi
 
       - name: go build
         working-directory: ${{ matrix.module }}
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # cache-dependency-path omitted — auto-detected; specifying it fails for modules without go.sum.
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
