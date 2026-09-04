@@ -10,9 +10,9 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 GO="${GO:-$(which go 2>/dev/null || echo go)}"
-GOLANGCI="${GOLANGCI_LINT:-$(which golangci-lint 2>/dev/null || true)}"
+GOLANGCI="${GOLANGCI_LINT:-$(which golangci-lint 2>/dev/null || echo "$HOME/go/bin/golangci-lint")}"
+[[ -x "$GOLANGCI" ]] || GOLANGCI=""
 GOVULNCHECK="${GOVULNCHECK:-$(which govulncheck 2>/dev/null || echo "$HOME/go/bin/govulncheck")}"
-# Verify the resolved path actually exists and is executable
 [[ -x "$GOVULNCHECK" ]] || GOVULNCHECK=""
 VAULT_BIN="${VAULT:-$(which vault 2>/dev/null || true)}"
 
