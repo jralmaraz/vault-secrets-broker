@@ -137,12 +137,17 @@ jobs:
 
       - name: Install Vault
         run: |
-          wget -q -O vault.zip \
-            "https://releases.hashicorp.com/vault/2.0.4/vault_2.0.4_linux_amd64.zip"
-          unzip -q -o vault.zip
-          # /usr/local/bin/vault may be a directory on some runners; install to home.
+          # Extract to a temp dir so the zip contents never collide with anything
+          # already in CWD or PATH.  Use cp+chmod instead of `install` to avoid
+          # the delete-first behaviour that fails when destination is a directory.
+          VAULT_VERSION="1.19.4"
+          TMP=$(mktemp -d)
+          wget -q -O "$TMP/vault.zip" \
+            "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip"
+          unzip -q "$TMP/vault.zip" -d "$TMP"
           mkdir -p "$HOME/.local/bin"
-          install -m 755 vault "$HOME/.local/bin/vault"
+          cp "$TMP/vault" "$HOME/.local/bin/vault"
+          chmod 755 "$HOME/.local/bin/vault"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/vault" version
 
