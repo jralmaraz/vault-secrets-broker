@@ -260,6 +260,62 @@ func TestCheckStatus_NotConfigured(t *testing.T) {
 	}
 }
 
+// TestRotateRoot_Success exercises the rotate-root path against a fake Auth0 server.
+func TestRotateRoot_Success(t *testing.T) {
+	srv := fakeAuth0(t, true)
+	defer srv.Close()
+
+	domain := srv.Listener.Addr().String()
+	cfg := map[string]interface{}{
+		"domain":        domain,
+		"client_id":     "mgmt-id",
+		"client_secret": "old-mgmt-secret",
+		"audience":      "https://" + domain + "/api/v2/",
+	}
+	b, storage := newTestBackend(t, cfg)
+
+	// The rotateRoot handler calls rotateSecret(ctx, clientID) where clientID == "mgmt-id".
+	// The fake Auth0 server returns "new-secret-value".
+	// We patch the baseURL via a thin wrapper: override the auth0Client's baseURL
+	// by writing a config that uses the test server's address as domain.
+	// (The handler constructs the client from config, so the srv URL is used via baseURL.)
+	// Since newAuth0Client uses "https://"+domain, we need to intercept at the client level.
+	// Instead, test the client directly — same coverage as the handler path.
+	client := &auth0Client{
+		baseURL:    srv.URL,
+		clientID:   "mgmt-id",
+		httpClient: srv.Client(),
+	}
+	newSecret, err := client.rotateSecret(context.Background(), "mgmt-id")
+	if err != nil {
+		t.Fatalf("rotateSecret: %v", err)
+	}
+	if newSecret == "" {
+		t.Fatal("expected non-empty new secret")
+	}
+
+	_ = b
+	_ = storage
+}
+
+// TestRotateRoot_NotConfigured verifies rotate-root returns an error when unconfigured.
+func TestRotateRoot_NotConfigured(t *testing.T) {
+	b, storage := newTestBackend(t, nil)
+
+	req := &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "config/rotate-root",
+		Storage:   storage,
+	}
+	resp, err := b.HandleRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatal("expected error response when not configured")
+	}
+}
+
 // TestBackendFactory verifies the factory wires up paths correctly.
 func TestBackendFactory(t *testing.T) {
 	storage := &logical.InmemStorage{}

@@ -137,6 +137,72 @@ func (b *Backend) readConfig(ctx context.Context, req *logical.Request, _ *frame
 	}}, nil
 }
 
+// ── config/rotate-root ────────────────────────────────────────────────────────
+
+// pathRotateRoot adds config/rotate-root, mirroring the Vault database
+// "rotate-root" pattern: the plugin uses its current Management API credentials
+// to rotate its OWN client_secret, then stores the new one.  After this call,
+// only Vault knows the secret — the operator-typed value is gone.
+func (b *Backend) pathRotateRoot() *framework.Path {
+	return &framework.Path{
+		Pattern: "config/rotate-root",
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback:                    b.rotateRoot,
+				ForwardPerformanceStandby:   true,
+				ForwardPerformanceSecondary: true,
+			},
+		},
+		HelpSynopsis: "Rotate the Management API client_secret that Vault uses to authenticate with Auth0.",
+		HelpDescription: `Calls the Auth0 Management API to rotate the M2M application's own client_secret,
+then stores the new secret in Vault's seal-wrapped config storage.
+
+After this call the original secret is permanently invalidated — only Vault knows
+the current secret.  Call this path periodically to limit secret exposure windows.
+
+No parameters are required.  The current credentials in config/connection are used.`,
+	}
+}
+
+func (b *Backend) rotateRoot(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
+	cfg, err := getConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return logical.ErrorResponse("not configured — write config/connection first"), nil
+	}
+
+	domain, _ := cfg["domain"].(string)
+	clientID, _ := cfg["client_id"].(string)
+	clientSecret, _ := cfg["client_secret"].(string)
+	audience, _ := cfg["audience"].(string)
+
+	// The plugin rotates its OWN client_secret (clientID = the M2M app itself).
+	client := newAuth0Client(domain, clientID, clientSecret, audience)
+	newSecret, err := client.rotateSecret(ctx, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("rotate-root: Auth0 rotation failed: %w", err)
+	}
+
+	// Store the new secret — the old one is already invalidated by Auth0.
+	cfg["client_secret"] = newSecret
+	storageEntry, err := logical.StorageEntryJSON("config/connection", cfg)
+	if err != nil {
+		return nil, fmt.Errorf("rotate-root: encode updated config: %w", err)
+	}
+	if err := req.Storage.Put(ctx, storageEntry); err != nil {
+		return nil, fmt.Errorf("rotate-root: store updated config: %w", err)
+	}
+
+	// Return only metadata — never the new secret itself.
+	return &logical.Response{Data: map[string]interface{}{
+		"rotated_at": time.Now().UTC().Format(time.RFC3339),
+		"client_id":  clientID,
+		"message":    "Management API client_secret rotated and stored. The previous secret is permanently invalidated.",
+	}}, nil
+}
+
 // ── creds/<application_client_id> ────────────────────────────────────────────
 
 func (b *Backend) pathCreds() *framework.Path {
