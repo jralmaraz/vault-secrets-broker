@@ -6,7 +6,7 @@ GOVULNCHECK  := govulncheck
 .PHONY: setup setup-phase2 stop status \
         build-rest-engine build-auth0-engine build-api build \
         test-rest-engine test-auth0-engine test-api test test-integration \
-        fmt vet lint vuln hooks check
+        fmt vet lint vuln hooks install-tools check
 
 # ── Phase 1: Vault foundation ────────────────────────────────────────────────
 
@@ -60,6 +60,13 @@ test-integration:
 hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed. Pre-push hook runs: gofmt, go vet, govulncheck, golangci-lint"
+
+# install-tools: installs required (govulncheck) and optional (golangci-lint) tools.
+# Run once after cloning, then 'make hooks' to activate the pre-push gate.
+install-tools:
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+	@echo "govulncheck installed."
+	@echo "Optional: install golangci-lint from https://golangci-lint.run/welcome/install/"
 
 # ── Lint / quality ────────────────────────────────────────────────────────────
 

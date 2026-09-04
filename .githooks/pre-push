@@ -2,9 +2,11 @@
 # pre-push hook — runs local quality gates before any push.
 # Install once with:  make hooks
 #
-# Blocks push on:  gofmt violations, go vet errors, govulncheck findings
-# Blocks push on:  golangci-lint errors (if golangci-lint is installed)
-# Skips silently:  govulncheck/golangci-lint when not installed
+# REQUIRED tools (push is blocked if missing):
+#   govulncheck  — go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+#
+# OPTIONAL tools (push continues with a warning if missing):
+#   golangci-lint — https://golangci-lint.run/welcome/install/
 
 set -euo pipefail
 
@@ -30,6 +32,20 @@ ok()   { echo -e "${GRN}✔ $*${NC}"; }
 info() { echo "  $*"; }
 
 echo "=== pre-push: running local quality gates ==="
+
+# ── 0. Require govulncheck ────────────────────────────────────────────────────
+# Security dependency scanning is not optional — it is the primary reason this
+# hook exists. Install it once and it runs in seconds.
+if [[ -z "$GOVULNCHECK" ]]; then
+  fail "govulncheck is not installed — push blocked."
+  echo ""
+  echo "  govulncheck scans for known CVEs in Go dependencies."
+  echo "  Install it with:"
+  echo "    go install golang.org/x/vuln/cmd/govulncheck@v1.6.0"
+  echo ""
+  echo "  Or run:  make install-tools"
+  exit 1
+fi
 
 # ── 1. gofmt ──────────────────────────────────────────────────────────────────
 echo
@@ -62,30 +78,26 @@ for mod in "${MODULES[@]}"; do
 done
 [[ $VET_FAILED -eq 0 ]] || exit 1
 
-# ── 3. govulncheck (per module, skip if not installed or no packages) ───────────
+# ── 3. govulncheck (required — blocks push on any finding) ────────────────────
 echo
 echo "→ govulncheck"
-if [[ -z "$GOVULNCHECK" ]]; then
-  warn "govulncheck not found — skipping (install: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0)"
-else
-  VULN_FAILED=0
-  for mod in "${MODULES[@]}"; do
-    dir="$REPO_ROOT/$mod"
-    if ! (cd "$dir" && "$GO" list ./... 2>/dev/null | grep -q .); then
-      info "$mod: no packages — skipping"
-      continue
-    fi
-    if ! (cd "$dir" && "$GOVULNCHECK" ./... 2>&1); then
-      fail "$mod: govulncheck found vulnerabilities"
-      VULN_FAILED=1
-    else
-      ok "$mod: govulncheck clean"
-    fi
-  done
-  [[ $VULN_FAILED -eq 0 ]] || exit 1
-fi
+VULN_FAILED=0
+for mod in "${MODULES[@]}"; do
+  dir="$REPO_ROOT/$mod"
+  if ! (cd "$dir" && "$GO" list ./... 2>/dev/null | grep -q .); then
+    info "$mod: no packages — skipping"
+    continue
+  fi
+  if ! (cd "$dir" && "$GOVULNCHECK" ./... 2>&1); then
+    fail "$mod: govulncheck found vulnerabilities — push blocked"
+    VULN_FAILED=1
+  else
+    ok "$mod: govulncheck clean"
+  fi
+done
+[[ $VULN_FAILED -eq 0 ]] || exit 1
 
-# ── 4. golangci-lint (per module, skip if not installed or no packages) ─────────
+# ── 4. golangci-lint (optional — warns if not installed) ──────────────────────
 echo
 echo "→ golangci-lint"
 if [[ -z "$GOLANGCI" ]]; then
