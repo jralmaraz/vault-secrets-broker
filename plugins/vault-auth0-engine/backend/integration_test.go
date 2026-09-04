@@ -42,11 +42,11 @@ import (
 
 // integrationEnv loads required env vars and skips the test if the secret is absent.
 type integrationEnv struct {
-	domain          string
-	mgmtClientID    string
+	domain           string
+	mgmtClientID     string
 	mgmtClientSecret string
-	audience        string
-	appClientID     string
+	audience         string
+	appClientID      string
 }
 
 func loadIntegrationEnv(t *testing.T) integrationEnv {
