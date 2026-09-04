@@ -32,6 +32,18 @@ jobs:
           go-version-file: ${{ matrix.module }}/go.mod
           # cache-dependency-path omitted — auto-detected; specifying it fails for modules without go.sum.
 
+      # Check if this module has any Go packages yet (placeholder modules may not).
+      - name: Check for Go packages
+        id: go-check
+        working-directory: ${{ matrix.module }}
+        run: |
+          if go list ./... 2>/dev/null | grep -q .; then
+            echo "has_packages=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_packages=false" >> $GITHUB_OUTPUT
+            echo "No Go packages in ${{ matrix.module }} — skipping build/vet/test steps"
+          fi
+
       # Verify the module graph is consistent with go.sum before doing anything else.
       # This is a supply-chain guard: tampered modules will not match the recorded hashes.
       - name: go mod verify
@@ -48,20 +60,23 @@ jobs:
           fi
 
       - name: go build
+        if: steps.go-check.outputs.has_packages == 'true'
         working-directory: ${{ matrix.module }}
         run: go build ./...
 
       - name: go vet
+        if: steps.go-check.outputs.has_packages == 'true'
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
       - name: go test
+        if: steps.go-check.outputs.has_packages == 'true'
         working-directory: ${{ matrix.module }}
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.go-check.outputs.has_packages == 'true'
         with:
           name: coverage-${{ matrix.module == 'cred-rotation-api' && 'api' || matrix.module == 'plugins/vault-rest-engine' && 'rest-engine' || 'auth0-engine' }}
           path: ${{ matrix.module }}/coverage.out
@@ -107,9 +122,21 @@ jobs:
           go-version-file: ${{ matrix.module }}/go.mod
           # cache-dependency-path omitted — auto-detected; specifying it fails for modules without go.sum.
 
+      - name: Check for Go packages
+        id: go-check
+        working-directory: ${{ matrix.module }}
+        run: |
+          if go list ./... 2>/dev/null | grep -q .; then
+            echo "has_packages=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_packages=false" >> $GITHUB_OUTPUT
+            echo "No Go packages in ${{ matrix.module }} — skipping lint"
+          fi
+
       - name: golangci-lint
+        if: steps.go-check.outputs.has_packages == 'true'
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           working-directory: ${{ matrix.module }}
-          args: --config ../../.golangci.yml --timeout 5m
+          args: --config ${{ github.workspace }}/.golangci.yml --timeout 5m
