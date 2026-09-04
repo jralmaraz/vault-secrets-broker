@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	vaultapi "github.com/hashicorp/vault/api"
 )
@@ -192,7 +193,7 @@ func (c *Client) IssuePKICert(ctx context.Context, role, commonName string, altN
 
 // LoadCACertPool builds a *x509.CertPool from the PKI CA certificate stored at caPath.
 func LoadCACertPool(caPath string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(caPath)
+	pem, err := os.ReadFile(filepath.Clean(caPath))
 	if err != nil {
 		return nil, fmt.Errorf("load CA cert: %w", err)
 	}

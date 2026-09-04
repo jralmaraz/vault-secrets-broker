@@ -78,6 +78,7 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 	return a, nil
 }
 
+// Name returns the adapter's registered name.
 func (a *Adapter) Name() string { return name }
 
 // Rotate calls POST /api/v2/clients/{providerID}/rotate-secret.
@@ -196,7 +197,7 @@ func (a *Adapter) managementToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("token request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode != http.StatusOK {

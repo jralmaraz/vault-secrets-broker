@@ -3,10 +3,8 @@
 # Install once with:  make hooks
 #
 # REQUIRED tools (push is blocked if missing):
-#   govulncheck  — go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-#
-# OPTIONAL tools (push continues with a warning if missing):
-#   golangci-lint — https://golangci-lint.run/welcome/install/
+#   govulncheck   — go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+#   golangci-lint — https://golangci-lint.run/welcome/install/ or: make install-tools
 
 set -euo pipefail
 
@@ -97,31 +95,36 @@ for mod in "${MODULES[@]}"; do
 done
 [[ $VULN_FAILED -eq 0 ]] || exit 1
 
-# ── 4. golangci-lint (optional — warns if not installed) ──────────────────────
+# ── 4. golangci-lint (required — blocks push if not installed or fails) ───────
 echo
 echo "→ golangci-lint"
 if [[ -z "$GOLANGCI" ]]; then
-  warn "golangci-lint not found — skipping (install: https://golangci-lint.run/welcome/install/)"
-else
-  LINT_FAILED=0
-  for mod in "${MODULES[@]}"; do
-    dir="$REPO_ROOT/$mod"
-    if ! (cd "$dir" && "$GO" list ./... 2>/dev/null | grep -q .); then
-      info "$mod: no packages — skipping"
-      continue
-    fi
-    if ! (cd "$dir" && "$GOLANGCI" run \
-        --config "$REPO_ROOT/.golangci.yml" \
-        --timeout 5m \
-        ./... 2>&1); then
-      fail "$mod: golangci-lint failed"
-      LINT_FAILED=1
-    else
-      ok "$mod: golangci-lint passed"
-    fi
-  done
-  [[ $LINT_FAILED -eq 0 ]] || exit 1
+  fail "golangci-lint is not installed — push blocked."
+  echo ""
+  echo "  golangci-lint catches errcheck, gosec, staticcheck and other issues."
+  echo "  Install it with:"
+  echo "    make install-tools"
+  echo ""
+  exit 1
 fi
+LINT_FAILED=0
+for mod in "${MODULES[@]}"; do
+  dir="$REPO_ROOT/$mod"
+  if ! (cd "$dir" && "$GO" list ./... 2>/dev/null | grep -q .); then
+    info "$mod: no packages — skipping"
+    continue
+  fi
+  if ! (cd "$dir" && "$GOLANGCI" run \
+      --config "$REPO_ROOT/.golangci.yml" \
+      --timeout 5m \
+      ./... 2>&1); then
+    fail "$mod: golangci-lint failed"
+    LINT_FAILED=1
+  else
+    ok "$mod: golangci-lint passed"
+  fi
+done
+[[ $LINT_FAILED -eq 0 ]] || exit 1
 
 echo
 echo -e "${GRN}=== pre-push: all gates passed ===${NC}"
