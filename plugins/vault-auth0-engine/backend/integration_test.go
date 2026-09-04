@@ -283,18 +283,20 @@ func TestIntegration_ReadConfig_HidesSecret(t *testing.T) {
 	t.Logf("config read response fields: %v", keySet(resp.Data))
 }
 
-// TestIntegration_RotateRoot rotates the M2M app's OWN client_secret (the secrets-broker
+// TestRotateRoot rotates the M2M app's OWN client_secret (the secrets-broker
 // management application), mirroring the Vault database root-rotation pattern.
 //
-// After this call:
-//   - The original client_secret is permanently invalidated by Auth0.
-//   - Only Vault's seal-wrapped config storage holds the new secret.
-//   - The test verifies the updated stored secret can obtain a fresh Management API token,
-//     proving Auth0 accepted the rotation.
+// DESTRUCTIVE: the old secret is permanently invalidated by Auth0 immediately.
+// After this test the GitHub Actions secret AUTH0_MGMT_CLIENT_SECRET is stale
+// and must be updated — the /run-rotate-root slash command handles this automatically.
 //
-// NOTE: This modifies the M2M app's secret. Ensure AUTH0_MGMT_CLIENT_ID is a
-// dedicated secrets-broker M2M app, not shared with other systems.
-func TestIntegration_RotateRoot(t *testing.T) {
+// Do NOT include this test in the regular /run-integration suite. Trigger it
+// only via the dedicated /run-rotate-root slash command, which updates the
+// GitHub secret automatically after a successful rotation.
+//
+// NOTE: This test is intentionally NOT prefixed with TestIntegration_ so that
+// `-run TestIntegration` excludes it by default.
+func TestRotateRoot(t *testing.T) {
 	env := loadIntegrationEnv(t)
 	b, storage := newIntegrationBackend(t, env, "")
 
@@ -342,6 +344,15 @@ func TestIntegration_RotateRoot(t *testing.T) {
 		t.Fatal("management token empty after rotate-root")
 	}
 	t.Logf("rotate-root: PASS — new secret authenticates successfully (token len=%d)", len(tok))
+
+	// In CI, write the new secret to a temp file so the workflow can update
+	// the GitHub Actions secret without it ever appearing in logs.
+	// The file is 0600 and lives only for the duration of the CI runner.
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		if err := os.WriteFile("/tmp/new-mgmt-secret", []byte(newSecret), 0600); err != nil {
+			t.Logf("warning: could not write new secret to /tmp/new-mgmt-secret: %v", err)
+		}
+	}
 }
 
 // TestIntegration_ManagementTokenCache verifies the token is cached across calls.

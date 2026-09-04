@@ -1,0 +1,197 @@
+name: Rotate-root slash command
+
+# Triggered by /run-rotate-root on a PR comment.
+# DESTRUCTIVE: rotates the M2M management app's own client_secret.
+# After rotation the new secret is written to the GitHub Actions secret
+# AUTH0_MGMT_CLIENT_SECRET automatically — no stale credentials.
+#
+# Prerequisites (one-time setup):
+#   Create a GitHub Fine-Grained PAT with "Secrets: Read and write" permission
+#   on this repository, then store it as the repository secret GH_PAT_SECRETS.
+#   That PAT is the only one ever needed — it lives alongside the secret it manages.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  rotate-root:
+    if: |
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/run-rotate-root') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+
+    runs-on: ubuntu-latest
+
+    env:
+      AUTH0_DOMAIN:             ${{ vars.AUTH0_DOMAIN }}
+      AUTH0_MGMT_CLIENT_ID:     ${{ vars.AUTH0_MGMT_CLIENT_ID }}
+      AUTH0_MGMT_AUDIENCE:      ${{ vars.AUTH0_MGMT_AUDIENCE }}
+      AUTH0_TEST_APP_CLIENT_ID: ${{ vars.AUTH0_TEST_APP_CLIENT_ID }}
+      AUTH0_MGMT_CLIENT_SECRET: ${{ secrets.AUTH0_MGMT_CLIENT_SECRET }}
+      # PAT with "Secrets: Read and write" on this repo.
+      GH_TOKEN: ${{ secrets.GH_PAT_SECRETS }}
+
+    steps:
+      # ── 1. Acknowledge immediately ────────────────────────────────────────────
+      - name: React 👀 to acknowledge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      # ── 2. Post a warning comment before starting ─────────────────────────────
+      - name: Post warning comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '⚠️ **rotate-root in progress** — rotating the M2M management app\'s own `client_secret`.',
+                '',
+                'The current secret will be permanently invalidated. The GitHub Actions secret',
+                '`AUTH0_MGMT_CLIENT_SECRET` will be updated automatically on success.',
+              ].join('\n'),
+            });
+
+      # ── 3. Checkout PR branch ─────────────────────────────────────────────────
+      - name: Get PR head ref
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', pr.head.sha.slice(0, 7));
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: plugins/vault-auth0-engine/go.mod
+
+      # ── 4. Start Vault dev server (for Transit tests) ─────────────────────────
+      - name: Install and start Vault dev server
+        run: |
+          VAULT_VERSION="1.19.4"
+          TMP=$(mktemp -d)
+          wget -q -O "$TMP/vault.zip" \
+            "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip"
+          unzip -q "$TMP/vault.zip" -d "$TMP"
+          mkdir -p "$HOME/.local/bin"
+          cp "$TMP/vault" "$HOME/.local/bin/vault"
+          chmod 755 "$HOME/.local/bin/vault"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          "$HOME/.local/bin/vault" server -dev -dev-root-token-id=root \
+            -dev-listen-address=127.0.0.1:8200 &
+          sleep 2
+          echo "VAULT_ADDR=http://127.0.0.1:8200" >> "$GITHUB_ENV"
+          echo "VAULT_TOKEN=root"                 >> "$GITHUB_ENV"
+
+      - name: Enable Transit secrets engine
+        run: vault secrets enable transit || true
+
+      # ── 5. Run ONLY TestRotateRoot ────────────────────────────────────────────
+      - name: Run TestRotateRoot
+        id: tests
+        working-directory: plugins/vault-auth0-engine
+        run: |
+          set +e
+          go test -tags=integration -v -timeout 60s \
+            -run ^TestRotateRoot$ \
+            ./backend/ 2>&1 | tee /tmp/rotate-root-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      # ── 6. Update GitHub Actions secret with the new client_secret ────────────
+      - name: Update AUTH0_MGMT_CLIENT_SECRET in GitHub
+        if: steps.tests.outputs.exit_code == '0'
+        run: |
+          if [[ ! -f /tmp/new-mgmt-secret ]]; then
+            echo "ERROR: /tmp/new-mgmt-secret not found — test may not have written it"
+            exit 1
+          fi
+          # gh uses GH_TOKEN env var set above (the PAT with secrets:write)
+          gh secret set AUTH0_MGMT_CLIENT_SECRET \
+            --repo "${{ github.repository }}" \
+            < /tmp/new-mgmt-secret
+          echo "GitHub Actions secret updated successfully."
+          # Securely delete the temp file
+          shred -u /tmp/new-mgmt-secret 2>/dev/null || rm -f /tmp/new-mgmt-secret
+
+      # ── 7. Post result comment ────────────────────────────────────────────────
+      - name: Post result comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = '';
+            try { output = fs.readFileSync('/tmp/rotate-root-output.txt', 'utf8'); } catch {}
+
+            const exitCode = '${{ steps.tests.outputs.exit_code }}';
+            const passed  = exitCode === '0';
+            const status  = passed ? '✅ PASSED' : '❌ FAILED';
+            const sha     = '${{ steps.pr.outputs.head_sha }}';
+            const runUrl  = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const actor   = context.payload.comment.user.login;
+
+            const secretNote = passed
+              ? '`AUTH0_MGMT_CLIENT_SECRET` has been updated in GitHub Actions — next integration run will use the new secret.'
+              : '⚠️ Rotation failed. `AUTH0_MGMT_CLIENT_SECRET` was **not** changed — the current secret is still valid.';
+
+            const body = [
+              `## rotate-root Result — ${status}`,
+              ``,
+              `**Triggered by**: @${actor} via \`/run-rotate-root\`  `,
+              `**Commit**: \`${sha}\`  **Run**: [${context.runId}](${runUrl})`,
+              ``,
+              secretNote,
+              ``,
+              `<details><summary>Full test output</summary>`,
+              ``,
+              '```',
+              output.slice(0, 30000),
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      # ── 8. Final reaction on the original command comment ─────────────────────
+      - name: React with result emoji
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const passed = '${{ steps.tests.outputs.exit_code }}' === '0';
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: passed ? 'rocket' : '-1',
+            });
