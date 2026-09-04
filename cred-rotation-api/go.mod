@@ -1,6 +1,6 @@
 module github.com/jralmaraz/vault-secrets-broker/cred-rotation-api
 
-go 1.26.0
+go 1.27.1
 
 require github.com/hashicorp/vault/api v1.23.0
 
