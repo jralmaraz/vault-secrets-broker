@@ -140,8 +140,11 @@ jobs:
           wget -q -O vault.zip \
             "https://releases.hashicorp.com/vault/2.0.4/vault_2.0.4_linux_amd64.zip"
           unzip -q -o vault.zip
-          sudo install -m 755 vault /usr/local/bin/vault
-          vault version
+          # /usr/local/bin/vault may be a directory on some runners; install to home.
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 vault "$HOME/.local/bin/vault"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/vault" version
 
       - name: Lint HCL policies
         run: |
