@@ -3,9 +3,9 @@ VAULT        := /opt/homebrew/bin/vault
 GOLANGCI     := golangci-lint
 GOVULNCHECK  := govulncheck
 
-.PHONY: setup setup-phase2 setup-phase3 stop status \
+.PHONY: setup setup-phase2 setup-phase3 setup-phase4 stop status \
         build-rest-engine build-auth0-engine build-api build \
-        build-plugin-rest-engine \
+        build-plugin-rest-engine build-plugin-auth0-engine \
         test-rest-engine test-auth0-engine test-api test test-integration \
         fmt vet lint vuln hooks install-tools check
 
@@ -33,6 +33,12 @@ setup-phase3:
 	@chmod +x scripts/phase3-setup.sh
 	@./scripts/phase3-setup.sh
 
+# ── Phase 4: vault-auth0-engine plugin registration ──────────────────────────
+
+setup-phase4:
+	@chmod +x scripts/phase4-setup.sh
+	@./scripts/phase4-setup.sh
+
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 build-rest-engine:
@@ -47,6 +53,9 @@ build-api:
 # Build plugin binary into vault/plugins/ for Vault registration.
 build-plugin-rest-engine:
 	cd plugins/vault-rest-engine && $(GO) build -o ../../vault/plugins/vault-rest-engine .
+
+build-plugin-auth0-engine:
+	cd plugins/vault-auth0-engine && $(GO) build -o ../../vault/plugins/vault-auth0-engine .
 
 build: build-rest-engine build-auth0-engine build-api
 

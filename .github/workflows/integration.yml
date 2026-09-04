@@ -1,0 +1,153 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    # Only run when auth0-engine plugin code changes — no need to hit the
+    # real Auth0 API for unrelated PRs.
+    paths:
+      - 'plugins/vault-auth0-engine/**'
+      - 'cred-rotation-api/**'
+      - 'scripts/phase*.sh'
+      - '.github/workflows/integration.yml'
+
+  # Allow manual trigger (e.g. after rotate-root to verify new secret works).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write   # needed to post the integration-test comment
+
+jobs:
+  # ── vault-auth0-engine integration tests ─────────────────────────────────────
+  auth0-engine:
+    name: Auth0 engine integration
+    runs-on: ubuntu-latest
+    # Skip if the required secret is not configured (e.g. forks, Dependabot PRs).
+    # The 'if' check prevents the job from failing on PRs from contributors who
+    # don't have access to repository secrets.
+    if: vars.AUTH0_DOMAIN != ''
+
+    env:
+      AUTH0_DOMAIN:           ${{ vars.AUTH0_DOMAIN }}
+      AUTH0_MGMT_CLIENT_ID:   ${{ vars.AUTH0_MGMT_CLIENT_ID }}
+      AUTH0_MGMT_AUDIENCE:    ${{ vars.AUTH0_MGMT_AUDIENCE }}
+      AUTH0_TEST_APP_CLIENT_ID: ${{ vars.AUTH0_TEST_APP_CLIENT_ID }}
+      # Secret — only available to trusted contributors and repo owners.
+      AUTH0_MGMT_CLIENT_SECRET: ${{ secrets.AUTH0_MGMT_CLIENT_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: plugins/vault-auth0-engine/go.mod
+
+      - name: Start Vault dev server (for Transit tests)
+        run: |
+          VAULT_VERSION="1.19.4"
+          TMP=$(mktemp -d)
+          wget -q -O "$TMP/vault.zip" \
+            "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip"
+          unzip -q "$TMP/vault.zip" -d "$TMP"
+          mkdir -p "$HOME/.local/bin"
+          cp "$TMP/vault" "$HOME/.local/bin/vault"
+          chmod 755 "$HOME/.local/bin/vault"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/vault" version
+
+          # Start in dev mode (in-memory, no unseal needed).
+          "$HOME/.local/bin/vault" server -dev -dev-root-token-id=root \
+            -dev-listen-address=127.0.0.1:8200 &
+          sleep 2   # wait for Vault to be ready
+          echo "VAULT_ADDR=http://127.0.0.1:8200" >> "$GITHUB_ENV"
+          echo "VAULT_TOKEN=root"                 >> "$GITHUB_ENV"
+
+      - name: Enable Transit secrets engine
+        run: vault secrets enable transit || true
+
+      - name: Run integration tests
+        id: run-tests
+        working-directory: plugins/vault-auth0-engine
+        run: |
+          go test -tags=integration -v -timeout 120s \
+            -run TestIntegration \
+            ./backend/ 2>&1 | tee /tmp/integration-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Post test results as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('/tmp/integration-output.txt', 'utf8');
+            const exitCode = '${{ steps.run-tests.outputs.exit_code }}';
+            const status = exitCode === '0' ? '✅ PASSED' : '❌ FAILED';
+            const sha = context.sha.slice(0, 7);
+
+            const body = [
+              `## Integration Test Results — vault-auth0-engine ${status}`,
+              ``,
+              `**Commit**: \`${sha}\`  **Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              ``,
+              `Tests call the real Auth0 Management API (tenant: \`${process.env.AUTH0_DOMAIN}\`).`,
+              `A passing run is evidence that credential rotation works end-to-end.`,
+              ``,
+              `<details><summary>Full test output</summary>`,
+              ``,
+              '```',
+              output.slice(0, 60000), // GitHub comment limit guard
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            // Delete any previous integration-test comment from this bot to keep the PR clean.
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments.data) {
+              if (comment.user.type === 'Bot' &&
+                  comment.body.includes('Integration Test Results — vault-auth0-engine')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail job if tests failed
+        if: steps.run-tests.outputs.exit_code != '0'
+        run: exit 1
+
+  # ── cred-rotation-api integration tests (placeholder — wired for Phase 2) ────
+  cred-rotation-api:
+    name: cred-rotation-api integration
+    runs-on: ubuntu-latest
+    # Only run when the API code changes.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.changed_files, 'cred-rotation-api/')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cred-rotation-api/go.mod
+      - name: Run integration tests
+        working-directory: cred-rotation-api
+        run: |
+          if go list -tags=integration ./... 2>/dev/null | grep -q .; then
+            go test -tags=integration -v -timeout 120s ./...
+          else
+            echo "No integration tests found in cred-rotation-api — skipping"
+          fi

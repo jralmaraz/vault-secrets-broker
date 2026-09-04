@@ -1,0 +1,190 @@
+name: Integration slash command
+
+# Triggered when someone comments /run-integration on a PR.
+# Only repo collaborators with write access can trigger this.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write   # to post the result comment and add reactions
+
+jobs:
+  run-integration:
+    # Guard conditions (all must be true):
+    #   1. The comment is on a PR, not a plain issue.
+    #   2. The comment body starts with /run-integration.
+    #   3. The commenter has write access (OWNER, MEMBER, or COLLABORATOR).
+    if: |
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/run-integration') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+
+    runs-on: ubuntu-latest
+
+    env:
+      AUTH0_DOMAIN:             ${{ vars.AUTH0_DOMAIN }}
+      AUTH0_MGMT_CLIENT_ID:     ${{ vars.AUTH0_MGMT_CLIENT_ID }}
+      AUTH0_MGMT_AUDIENCE:      ${{ vars.AUTH0_MGMT_AUDIENCE }}
+      AUTH0_TEST_APP_CLIENT_ID: ${{ vars.AUTH0_TEST_APP_CLIENT_ID }}
+      AUTH0_MGMT_CLIENT_SECRET: ${{ secrets.AUTH0_MGMT_CLIENT_SECRET }}
+
+    steps:
+      # ── 1. Acknowledge the command immediately ────────────────────────────────
+      - name: React with 👀 to acknowledge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      # ── 2. Find the PR's head branch and SHA ─────────────────────────────────
+      - name: Get PR head ref
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', pr.head.sha.slice(0, 7));
+
+      # ── 3. Checkout the PR branch (not the default branch) ───────────────────
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: plugins/vault-auth0-engine/go.mod
+
+      # ── 4. Start Vault dev server for Transit tests ───────────────────────────
+      - name: Install and start Vault dev server
+        run: |
+          VAULT_VERSION="1.19.4"
+          TMP=$(mktemp -d)
+          wget -q -O "$TMP/vault.zip" \
+            "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip"
+          unzip -q "$TMP/vault.zip" -d "$TMP"
+          mkdir -p "$HOME/.local/bin"
+          cp "$TMP/vault" "$HOME/.local/bin/vault"
+          chmod 755 "$HOME/.local/bin/vault"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          "$HOME/.local/bin/vault" server -dev -dev-root-token-id=root \
+            -dev-listen-address=127.0.0.1:8200 &
+          sleep 2
+          echo "VAULT_ADDR=http://127.0.0.1:8200" >> "$GITHUB_ENV"
+          echo "VAULT_TOKEN=root"                 >> "$GITHUB_ENV"
+
+      - name: Enable Transit secrets engine
+        run: vault secrets enable transit || true
+
+      # ── 5. Run integration tests, capture output ──────────────────────────────
+      - name: Run integration tests
+        id: tests
+        working-directory: plugins/vault-auth0-engine
+        run: |
+          set +e
+          go test -tags=integration -v -timeout 120s \
+            -run TestIntegration \
+            ./backend/ 2>&1 | tee /tmp/integration-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      # ── 6. Post result as PR comment (replace previous slash-command result) ──
+      - name: Post integration test results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('/tmp/integration-output.txt', 'utf8');
+            const exitCode = '${{ steps.tests.outputs.exit_code }}';
+            const passed  = exitCode === '0';
+            const status  = passed ? '✅ PASSED' : '❌ FAILED';
+            const sha     = '${{ steps.pr.outputs.head_sha }}';
+            const runUrl  = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const actor   = context.payload.comment.user.login;
+
+            // Parse individual test results for a summary table.
+            const lines = output.split('\n');
+            const results = [];
+            for (const line of lines) {
+              const m = line.match(/^--- (PASS|FAIL): (TestIntegration\S+) \(([0-9.]+s)\)/);
+              if (m) results.push({ status: m[1], name: m[2], duration: m[3] });
+            }
+
+            let table = '';
+            if (results.length > 0) {
+              table = [
+                '| Test | Result | Duration |',
+                '|------|--------|----------|',
+                ...results.map(r =>
+                  `| \`${r.name}\` | ${r.status === 'PASS' ? '✅' : '❌'} ${r.status} | ${r.duration} |`
+                ),
+              ].join('\n');
+            }
+
+            const body = [
+              `## Integration Test Results — vault-auth0-engine ${status}`,
+              ``,
+              `**Triggered by**: @${actor} via \`/run-integration\`  `,
+              `**Commit**: \`${sha}\`  **Run**: [${context.runId}](${runUrl})`,
+              ``,
+              table,
+              ``,
+              `<details><summary>Full test output</summary>`,
+              ``,
+              '```',
+              output.slice(0, 60000),
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            // Delete any previous slash-command result comment to keep the PR clean.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const c of comments) {
+              if (c.user.type === 'Bot' &&
+                  c.body.includes('Integration Test Results — vault-auth0-engine')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: c.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      # ── 7. React with ✅ or ❌ on the original command comment ───────────────
+      - name: React with result emoji
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const passed = '${{ steps.tests.outputs.exit_code }}' === '0';
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: passed ? 'rocket' : '-1',
+            });
