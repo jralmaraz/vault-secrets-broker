@@ -92,9 +92,8 @@ jobs:
           working-directory: ${{ matrix.module }}
 
       - name: Upload SARIF
-        if: steps.go-check.outputs.has_packages == 'true'
+        if: always() && steps.go-check.outputs.has_packages == 'true'
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
         with:
           sarif_file: ${{ matrix.module }}/gosec-${{ matrix.module == 'cred-rotation-api' && 'api' || matrix.module == 'plugins/vault-rest-engine' && 'rest-engine' || 'auth0-engine' }}.sarif
 
