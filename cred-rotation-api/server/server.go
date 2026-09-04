@@ -142,7 +142,7 @@ func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 			"path", fmt.Sprintf("%q", r.URL.Path),
 			"status", rw.statusCode,
 			"remote", fmt.Sprintf("%q", r.RemoteAddr),
-			"cert_cn", cn,
+			"cert_cn", fmt.Sprintf("%q", cn),
 			"cert_serial", serial,
 		)
 	})
@@ -168,7 +168,7 @@ func certAuthz(allowlist map[string][]string, logger *slog.Logger, next http.Han
 				return
 			}
 		}
-		logger.Warn("cert authz denied", "path", r.URL.Path, "cert_cn", cn)
+		logger.Warn("cert authz denied", "path", fmt.Sprintf("%q", r.URL.Path), "cert_cn", fmt.Sprintf("%q", cn))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
