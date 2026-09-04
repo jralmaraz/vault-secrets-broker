@@ -49,6 +49,13 @@ type Config struct {
 
 	// Logger is the structured logger. If nil, a default logger is created.
 	Logger *slog.Logger
+
+	// CertAllowlist restricts which client cert CNs may call each endpoint.
+	// Key format: "METHOD /path" (e.g. "POST /v1/credentials/rotate").
+	// Value: slice of allowed client cert Common Names.
+	// If a path has no entry, any verified cert CN is accepted for that path.
+	// If the map is nil or empty, all endpoints accept any verified cert.
+	CertAllowlist map[string][]string
 }
 
 // New constructs a Server from Config. Call ListenAndServeTLS to start it.
@@ -86,7 +93,7 @@ func New(cfg Config) (*Server, error) {
 
 	httpSrv := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      requestLogger(logger, mux),
+		Handler:      requestLogger(logger, certAuthz(cfg.CertAllowlist, logger, mux)),
 		TLSConfig:    cfg.TLSConfig,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
@@ -123,18 +130,61 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
-// requestLogger is a minimal middleware that logs method, path, and status code.
+// requestLogger logs method, path, status, remote address, and client cert identity
+// on every request. Client cert CN and serial are required for the audit trail.
 func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(rw, r)
+		cn, serial := clientCertIdentity(r)
 		logger.Info("request",
 			"method", r.Method,
 			"path", fmt.Sprintf("%q", r.URL.Path),
 			"status", rw.statusCode,
 			"remote", fmt.Sprintf("%q", r.RemoteAddr),
+			"cert_cn", cn,
+			"cert_serial", serial,
 		)
 	})
+}
+
+// certAuthz enforces per-endpoint client cert CN authorization.
+// Paths absent from the allowlist accept any verified cert CN.
+func certAuthz(allowlist map[string][]string, logger *slog.Logger, next http.Handler) http.Handler {
+	if len(allowlist) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Method + " " + r.URL.Path
+		allowed, ok := allowlist[key]
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		cn, _ := clientCertIdentity(r)
+		for _, a := range allowed {
+			if a == cn {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		logger.Warn("cert authz denied", "path", r.URL.Path, "cert_cn", cn)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+	})
+}
+
+// clientCertIdentity returns the Common Name and hex-encoded serial number of the
+// first peer certificate from the TLS handshake. Returns "none" for both if there
+// is no TLS connection or no peer certificate (unauthenticated connections are
+// rejected upstream by RequireAndVerifyClientCert).
+func clientCertIdentity(r *http.Request) (cn, serial string) {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return "none", "none"
+	}
+	cert := r.TLS.PeerCertificates[0]
+	return cert.Subject.CommonName, cert.SerialNumber.Text(16)
 }
 
 type responseWriter struct {
