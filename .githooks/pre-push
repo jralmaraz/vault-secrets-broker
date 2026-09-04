@@ -12,6 +12,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 GO="${GO:-$(which go 2>/dev/null || echo go)}"
 GOLANGCI="${GOLANGCI_LINT:-$(which golangci-lint 2>/dev/null || true)}"
 GOVULNCHECK="${GOVULNCHECK:-$(which govulncheck 2>/dev/null || true)}"
+VAULT_BIN="${VAULT:-$(which vault 2>/dev/null || true)}"
 
 MODULES=(
   "plugins/vault-rest-engine"
@@ -30,6 +31,23 @@ ok()   { echo -e "${GRN}✔ $*${NC}"; }
 info() { echo "  $*"; }
 
 echo "=== pre-push: running local quality gates ==="
+
+# ── 0a. vault policy fmt (optional — warns if vault not installed) ─────────────
+echo
+echo "→ vault policy fmt"
+if [[ -z "$VAULT_BIN" ]]; then
+  warn "vault not found — skipping policy fmt check (install: https://developer.hashicorp.com/vault/downloads)"
+else
+  POLICY_FAILED=0
+  for f in "$REPO_ROOT/vault/policies/"*.hcl; do
+    "$VAULT_BIN" policy fmt "$f"
+    if ! git diff --exit-code "$f" > /dev/null 2>&1; then
+      fail "vault policy fmt changed $f — commit the reformatted file"
+      POLICY_FAILED=1
+    fi
+  done
+  [[ $POLICY_FAILED -eq 0 ]] && ok "vault policy fmt: all policies formatted" || exit 1
+fi
 
 # ── 0. Require govulncheck ────────────────────────────────────────────────────
 # Security dependency scanning is not optional — it is the primary reason this

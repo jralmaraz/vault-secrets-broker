@@ -19,6 +19,7 @@ path "transit/datakey/plaintext/cred-rotation-key" {
 path "secret/data/cred-rotation-api/*" {
   capabilities = ["read"]
 }
+
 path "secret/metadata/cred-rotation-api/*" {
   capabilities = ["read", "list"]
 }

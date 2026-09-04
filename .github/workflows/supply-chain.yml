@@ -31,7 +31,8 @@ jobs:
           # All Go dependencies in this project must be OSI-approved.
           allow-licenses: >-
             MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0,
-            LicenseRef-scancode-google-patent-license-golang
+            LicenseRef-scancode-google-patent-license-golang,
+            CC-BY-SA-4.0, LicenseRef-scancode-dco-1.1
 
   # ── go mod verify — cryptographic integrity of all downloaded modules ────────
   mod-verify:

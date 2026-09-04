@@ -3,22 +3,17 @@ VAULT        := /opt/homebrew/bin/vault
 GOLANGCI     := golangci-lint
 GOVULNCHECK  := govulncheck
 
-.PHONY: setup setup-phase2 stop status \
+.PHONY: setup setup-phase2 setup-phase3 stop status \
         build-rest-engine build-auth0-engine build-api build \
+        build-plugin-rest-engine \
         test-rest-engine test-auth0-engine test-api test test-integration \
         fmt vet lint vuln hooks install-tools check
 
-# ── Phase 1: Vault foundation ────────────────────────────────────────────────
+# ── Phase 1: Vault foundation ─────────────────────────────────────────────────
 
 setup:
 	@chmod +x scripts/phase1-setup.sh scripts/stop-vault.sh
 	@./scripts/phase1-setup.sh
-
-# ── Phase 2: cred-rotation-api Vault prerequisites ───────────────────────────
-
-setup-phase2:
-	@chmod +x scripts/phase2-setup.sh
-	@./scripts/phase2-setup.sh
 
 stop:
 	@./scripts/stop-vault.sh
@@ -26,7 +21,19 @@ stop:
 status:
 	@$(VAULT) status 2>/dev/null || echo "Vault is not running. Run: make setup"
 
-# ── Build ────────────────────────────────────────────────────────────────────
+# ── Phase 2: cred-rotation-api Vault prerequisites ────────────────────────────
+
+setup-phase2:
+	@chmod +x scripts/phase2-setup.sh
+	@./scripts/phase2-setup.sh
+
+# ── Phase 3: vault-rest-engine plugin registration ────────────────────────────
+
+setup-phase3:
+	@chmod +x scripts/phase3-setup.sh
+	@./scripts/phase3-setup.sh
+
+# ── Build ─────────────────────────────────────────────────────────────────────
 
 build-rest-engine:
 	cd plugins/vault-rest-engine && $(GO) build ./...
@@ -37,21 +44,26 @@ build-auth0-engine:
 build-api:
 	cd cred-rotation-api && $(GO) build ./...
 
+# Build plugin binary into vault/plugins/ for Vault registration.
+build-plugin-rest-engine:
+	cd plugins/vault-rest-engine && $(GO) build -o ../../vault/plugins/vault-rest-engine .
+
 build: build-rest-engine build-auth0-engine build-api
 
-# ── Test ─────────────────────────────────────────────────────────────────────
+# ── Test ──────────────────────────────────────────────────────────────────────
 
 test-rest-engine:
-	cd plugins/vault-rest-engine && $(GO) test ./...
+	cd plugins/vault-rest-engine && $(GO) test -race ./...
 
 test-auth0-engine:
-	cd plugins/vault-auth0-engine && $(GO) test ./...
+	cd plugins/vault-auth0-engine && $(GO) test -race ./...
 
 test-api:
-	cd cred-rotation-api && $(GO) test ./...
+	cd cred-rotation-api && $(GO) test -race ./...
 
 test: test-rest-engine test-auth0-engine test-api
 
+# Integration tests require a running Vault dev server (make setup first).
 test-integration:
 	@source .vault-env && cd cred-rotation-api && $(GO) test -tags=integration -race -v ./vault/...
 
