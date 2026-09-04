@@ -31,14 +31,20 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # cache-dependency-path omitted — auto-detected; specifying it fails for modules without go.sum.
 
       - name: Install govulncheck (pinned v1.6.0)
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 
       - name: govulncheck
         working-directory: ${{ matrix.module }}
-        run: govulncheck ./...
+        run: |
+          # Skip gracefully if the module has no Go packages yet (placeholder module).
+          if ! go list ./... 2>/dev/null | grep -q .; then
+            echo "No Go packages in ${{ matrix.module }} — skipping govulncheck"
+            exit 0
+          fi
+          govulncheck ./...
 
   # ── gosec — static security analysis ───────────────────────────────────────
   gosec:
@@ -57,9 +63,21 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # cache-dependency-path omitted — auto-detected; specifying it fails for modules without go.sum.
+
+      - name: Check for Go packages
+        id: go-check
+        working-directory: ${{ matrix.module }}
+        run: |
+          if go list ./... 2>/dev/null | grep -q .; then
+            echo "has_packages=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_packages=false" >> $GITHUB_OUTPUT
+            echo "No Go packages in ${{ matrix.module }} — skipping gosec"
+          fi
 
       - name: gosec
+        if: steps.go-check.outputs.has_packages == 'true'
         uses: securego/gosec@master
         with:
           # -fmt sarif: upload findings to GitHub Security tab
@@ -74,6 +92,7 @@ jobs:
           working-directory: ${{ matrix.module }}
 
       - name: Upload SARIF
+        if: steps.go-check.outputs.has_packages == 'true'
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
@@ -125,7 +144,7 @@ jobs:
         run: |
           wget -q -O vault.zip \
             "https://releases.hashicorp.com/vault/2.0.4/vault_2.0.4_linux_amd64.zip"
-          unzip -q vault.zip
+          unzip -q -o vault.zip
           sudo mv vault /usr/local/bin/vault
           vault version
 
