@@ -2,9 +2,13 @@ module github.com/jralmaraz/vault-secrets-broker/cred-rotation-api
 
 go 1.27.1
 
-require github.com/hashicorp/vault/api v1.23.0
+require (
+	github.com/hashicorp/vault/api v1.23.0
+	github.com/spiffe/go-spiffe/v2 v2.8.1
+)
 
 require (
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -20,6 +24,10 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/grpc v1.79.3 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )

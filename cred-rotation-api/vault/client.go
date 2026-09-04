@@ -1,5 +1,5 @@
 // Package vault wraps the Vault API client for the operations cred-rotation-api needs:
-// AppRole auth, Transit encrypt/decrypt, KV v2 reads, and PKI certificate issuance.
+// JWT/OIDC + SPIFFE workload identity auth, Transit encrypt/decrypt, KV v2 reads, and PKI certificate issuance.
 package vault
 
 import (
@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 
 	vaultapi "github.com/hashicorp/vault/api"
+	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
+	"github.com/spiffe/go-spiffe/v2/workloadapi"
 )
 
 // Client wraps the Vault API client and exposes only the operations used by cred-rotation-api.
@@ -26,10 +28,26 @@ type Config struct {
 	// Address is the Vault server URL (e.g. "http://127.0.0.1:8200").
 	Address string
 
-	// Token is used directly (dev mode / root token). Mutually exclusive with AppRole.
+	// Token is used directly (dev mode / root token). Highest priority.
 	Token string
 
-	// AppRole credentials. Used when Token is empty.
+	// JWT/OIDC auth — present a JWT to Vault's auth/jwt method.
+	// JWTMountPath: Vault auth mount, e.g. "auth/jwt/login" (default).
+	// JWTRole: the Vault JWT role name.
+	// JWTToken: raw JWT string (e.g. from env VAULT_JWT_TOKEN). Used if SPIFFE is not available.
+	JWTMountPath string
+	JWTRole      string
+	JWTToken     string
+
+	// SPIFFE workload identity.
+	// If SPIFFESocket is set, a JWT-SVID is fetched from the SPIRE workload API
+	// and presented to Vault JWT auth. Takes priority over JWTToken.
+	// Format: "unix:///run/spire/agent.sock" or "tcp://spire-agent:8081".
+	// If empty, falls back to VAULT_JWT_TOKEN, then AppRole.
+	SPIFFESocket   string
+	SPIFFEAudience string // Vault audience claim for the JWT-SVID (required when SPIFFESocket is set)
+
+	// AppRole credentials. Local-dev fallback when no other auth method is configured.
 	RoleID   string
 	SecretID string
 
@@ -38,16 +56,19 @@ type Config struct {
 	CACertPath string
 }
 
-// NewFromEnv builds a Config from the standard environment variables:
-//
-//	VAULT_ADDR, VAULT_TOKEN (or VAULT_APPROLE_ROLE_ID + VAULT_APPROLE_SECRET_ID)
+// NewFromEnv builds a Config from the standard environment variables.
 func NewFromEnv() Config {
 	return Config{
-		Address:    envOr("VAULT_ADDR", "http://127.0.0.1:8200"),
-		Token:      os.Getenv("VAULT_TOKEN"),
-		RoleID:     os.Getenv("VAULT_APPROLE_ROLE_ID"),
-		SecretID:   os.Getenv("VAULT_APPROLE_SECRET_ID"),
-		CACertPath: os.Getenv("VAULT_CACERT"),
+		Address:        envOr("VAULT_ADDR", "http://127.0.0.1:8200"),
+		Token:          os.Getenv("VAULT_TOKEN"),
+		JWTMountPath:   envOr("VAULT_JWT_MOUNT", "auth/jwt/login"),
+		JWTRole:        os.Getenv("VAULT_JWT_ROLE"),
+		JWTToken:       os.Getenv("VAULT_JWT_TOKEN"),
+		SPIFFESocket:   os.Getenv("SPIFFE_ENDPOINT_SOCKET"),
+		SPIFFEAudience: os.Getenv("VAULT_SPIFFE_AUDIENCE"),
+		RoleID:         os.Getenv("VAULT_APPROLE_ROLE_ID"),
+		SecretID:       os.Getenv("VAULT_APPROLE_SECRET_ID"),
+		CACertPath:     os.Getenv("VAULT_CACERT"),
 	}
 }
 
@@ -67,27 +88,81 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("vault: new client: %w", err)
 	}
 
-	if cfg.Token != "" {
+	switch {
+	case cfg.Token != "":
 		vc.SetToken(cfg.Token)
-		return &Client{vc: vc}, nil
+
+	case cfg.SPIFFESocket != "":
+		jwt, err := fetchSPIFFEJWT(context.Background(), cfg.SPIFFESocket, cfg.SPIFFEAudience)
+		if err != nil {
+			return nil, fmt.Errorf("vault: SPIFFE JWT-SVID: %w", err)
+		}
+		if err := loginJWT(vc, cfg.JWTMountPath, cfg.JWTRole, jwt); err != nil {
+			return nil, err
+		}
+
+	case cfg.JWTToken != "":
+		if err := loginJWT(vc, cfg.JWTMountPath, cfg.JWTRole, cfg.JWTToken); err != nil {
+			return nil, err
+		}
+
+	case cfg.RoleID != "" && cfg.SecretID != "":
+		secret, err := vc.Logical().Write("auth/approle/login", map[string]interface{}{
+			"role_id":   cfg.RoleID,
+			"secret_id": cfg.SecretID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("vault: AppRole login: %w", err)
+		}
+		if secret == nil || secret.Auth == nil {
+			return nil, errors.New("vault: AppRole login returned empty auth")
+		}
+		vc.SetToken(secret.Auth.ClientToken)
+
+	default:
+		return nil, errors.New("vault: must supply VAULT_TOKEN, SPIFFE_ENDPOINT_SOCKET, VAULT_JWT_TOKEN, or VAULT_APPROLE_ROLE_ID+VAULT_APPROLE_SECRET_ID")
 	}
 
-	if cfg.RoleID == "" || cfg.SecretID == "" {
-		return nil, errors.New("vault: must supply VAULT_TOKEN or VAULT_APPROLE_ROLE_ID+VAULT_APPROLE_SECRET_ID")
-	}
+	return &Client{vc: vc}, nil
+}
 
-	secret, err := vc.Logical().Write("auth/approle/login", map[string]interface{}{
-		"role_id":   cfg.RoleID,
-		"secret_id": cfg.SecretID,
-	})
+// loginJWT authenticates to Vault via the JWT auth method and sets the client token.
+func loginJWT(vc *vaultapi.Client, mountPath, role, jwt string) error {
+	params := map[string]interface{}{"jwt": jwt}
+	if role != "" {
+		params["role"] = role
+	}
+	secret, err := vc.Logical().Write(mountPath, params)
 	if err != nil {
-		return nil, fmt.Errorf("vault: AppRole login: %w", err)
+		return fmt.Errorf("vault: JWT auth login: %w", err)
 	}
 	if secret == nil || secret.Auth == nil {
-		return nil, errors.New("vault: AppRole login returned empty auth")
+		return errors.New("vault: JWT auth returned empty auth")
 	}
 	vc.SetToken(secret.Auth.ClientToken)
-	return &Client{vc: vc}, nil
+	return nil
+}
+
+// fetchSPIFFEJWT retrieves a JWT-SVID from the SPIFFE workload API.
+// The returned string is the raw JWT (three base64url-encoded parts separated by dots).
+func fetchSPIFFEJWT(ctx context.Context, socketAddr, audience string) (string, error) {
+	if audience == "" {
+		return "", errors.New("SPIFFE: audience is required for JWT-SVID fetch (set VAULT_SPIFFE_AUDIENCE)")
+	}
+	source, err := workloadapi.NewJWTSource(
+		ctx,
+		workloadapi.WithClientOptions(workloadapi.WithAddr(socketAddr)),
+	)
+	if err != nil {
+		return "", fmt.Errorf("SPIFFE: connect to workload API at %s: %w", socketAddr, err)
+	}
+	defer source.Close()
+
+	svid, err := source.FetchJWTSVID(ctx, jwtsvid.Params{Audience: audience})
+	if err != nil {
+		return "", fmt.Errorf("SPIFFE: fetch JWT-SVID (audience=%s): %w", audience, err)
+	}
+	return svid.Marshal(), nil
 }
 
 // TransitEncrypt encrypts plaintext (raw bytes) using the named Transit key.
