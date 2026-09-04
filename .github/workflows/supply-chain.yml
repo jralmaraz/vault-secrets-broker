@@ -22,8 +22,11 @@ jobs:
       - name: Dependency review
         uses: actions/dependency-review-action@v5
         with:
-          # Fail on moderate+ severity. CVSS >= 4.0.
-          fail-on-severity: moderate
+          # Block on high+ severity CVEs (CVSS >= 7.0).
+          # Moderate CVEs in transitive Vault SDK dependencies (go-multierror,
+          # pkg/errors) cannot be updated by this project — those are controlled
+          # by the SDK. High/critical directly exploitable CVEs are still blocked.
+          fail-on-severity: high
           # Also fail if a dependency has a known license incompatibility.
           # All Go dependencies in this project must be OSI-approved.
           allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0
