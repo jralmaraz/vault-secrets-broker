@@ -138,18 +138,48 @@ It is never written to disk, never stored in Vault KV, never logged.
 |---|---|---|
 | Consumer → Vault | OIDC / Kubernetes / AppRole | Vault token (scoped, short-lived) |
 | Plugin → Credential Rotation API | mTLS client certificate | cert issued by internal PKI CA |
-| Credential Rotation API → Vault (Transit) | AppRole | role_id (non-secret) + secret_id (injected at boot) |
+| Credential Rotation API → Vault (Transit) | **JWT/OIDC** (CI) · **SPIFFE JWT-SVID** (prod) · AppRole (local dev) | No static credential in CI or prod; AppRole is local-dev fallback only |
 | Credential Rotation API → SaaS providers | TLS + API credentials | loaded from Transit-decrypted KV at startup |
 
-### AppRole bootstrap options (no Kubernetes)
+### Identity upgrade: AppRole → JWT/OIDC + SPIFFE (issue #16)
 
-| Environment | Method | Notes |
-|---|---|---|
-| Local dev / PoC | `VAULT_APPROLE_SECRET_ID` env var | Simple. Never use in shared environments. |
-| Any host (recommended) | **Vault TLS Cert Auth** | Cert = identity, no secret to inject. Cert issued by internal PKI engine. |
-| Bare metal / VM | SPIFFE/SPIRE + Vault JWT auth | Vault 2.0+ native SVID support. No cert management needed. |
-| Cloud (AWS/GCP/Azure) | Cloud metadata auth | IAM role / managed identity is the trust root. No secret at all. |
-| Any (Vault-native) | AppRole + Response Wrapping | 5-min single-use wrapping token, detectable if intercepted. |
+AppRole requires distributing a static `secret_id` — a shared secret that must be stored somewhere before it can be injected. The upgrade replaces it with identity-native authentication that issues no credential to distribute:
+
+| Tier | Environment | Method | Credential distributed |
+|---|---|---|---|
+| 1 | CI/CD (GitHub Actions) | GitHub OIDC → Vault JWT auth | None — GitHub issues an OIDC JWT per job |
+| 2 | Production service | SPIFFE/SPIRE JWT-SVID → Vault JWT auth | None — SPIRE attestation is workload-based |
+| 3 | Local dev | `VAULT_TOKEN` or AppRole | Static token / secret_id acceptable locally |
+
+The `cred-rotation-api/vault/client.go` auth priority:
+1. `VAULT_TOKEN` set → use directly (fastest local dev)
+2. `SPIFFE_ENDPOINT_SOCKET` set → fetch JWT-SVID from SPIRE agent → Vault JWT auth
+3. `VAULT_JWT_TOKEN` set → Vault JWT auth with provided token
+4. `VAULT_APPROLE_ROLE_ID` + `VAULT_APPROLE_SECRET_ID` → AppRole (fallback)
+
+### Per-endpoint certificate authorization (issue #14)
+
+The mTLS server enforces which client cert Common Names may call which endpoints. A `CertAllowlist` in `server.Config` restricts identities per route:
+
+```go
+// Only the CI pipeline cert may rotate; only the operator cert may revoke.
+CertAllowlist: map[string][]string{
+    "POST /v1/credentials/rotate": {"ci-pipeline", "vault-rest-engine"},
+    "POST /v1/credentials/revoke": {"operator"},
+}
+```
+
+Paths absent from the allowlist accept any verified cert. An empty allowlist accepts any verified cert on all paths (backward-compatible default).
+
+### Audit trail: cert CN + serial in every log line (issue #15)
+
+Every request log line now includes the client cert identity for the audit trail:
+
+```
+INFO request method=POST path="/v1/credentials/rotate" status=200 remote="127.0.0.1:54321" cert_cn=ci-pipeline cert_serial=ff
+```
+
+This ties every credential rotation to a named client identity, satisfying SOC 2 CC6.1 (logical access controls) and CC7.2 (monitoring of system components).
 
 ---
 
@@ -540,11 +570,11 @@ Only the `client_secret` is Transit-encrypted. The other fields are not sensitiv
 | Phase | Status | What gets built |
 |---|---|---|
 | **1. Foundation** | ✅ Complete | Vault dev server, PKI, Transit, AppRole, KV, policies, setup script |
-| **2. cred-rotation-api** | 🔜 Next | mTLS Go server, Adapter interface, Auth0 adapter, Transit config loading |
-| **3. vault-rest-engine** | ⏳ Planned | Custom Vault plugin, config/roles/creds paths, mTLS call to API, lease management |
-| **4. vault-auth0-engine** | ⏳ Planned | Auth0-native Vault plugin (direct API calls), comparison with Phase 2+3 approach |
-| **5. Additional adapters** | ⏳ Planned | Splunk + SonarQube adapters in cred-rotation-api, zero plugin changes |
-| **6. Hardening** | ⏳ Planned | Circuit breaker, rotation failure handling, demo script, audit log review |
+| **2. cred-rotation-api** | ✅ Complete | mTLS Go server, Adapter interface, Auth0 adapter, Transit config loading, per-endpoint cert authz, cert identity audit logging |
+| **3. vault-rest-engine** | ✅ Complete | Generic Vault plugin, config/roles/creds paths, mTLS call to cred-rotation-api, `/run-integration` slash command |
+| **4. vault-auth0-engine** | ✅ Complete | Auth0-native Vault plugin (direct API calls), rotate-root pattern, seal-wrapped storage, Transit encryption layer, integration test CI slash commands |
+| **5. Lease lifecycle + adapters** | 🔄 In progress | `logical.Secret` RenewFunc/RevokeFunc in vault-auth0-engine; Splunk + SonarQube adapters; JWT/OIDC + SPIFFE workload identity replacing AppRole |
+| **6. Hardening** | ⏳ Planned | Circuit breaker, rotation failure handling, ML-DSA certs (pending Vault PKI + Go x509 support), demo script, audit log review |
 
 ---
 
@@ -575,8 +605,10 @@ type Adapter interface {
 | Item | Status | Notes |
 |---|---|---|
 | `vault server -dev` is in-memory | PoC only | Dev mode uses an in-memory storage backend. Restart = all data lost. Switch to Raft file backend for persistence testing. |
-| AppRole secret_id via env var | Phase 1 only | Replace with Vault TLS Cert Auth in Phase 2. Env var approach is acceptable for local dev. |
-| `token_bound_cidrs=127.0.0.1/32` | PoC | Restricts AppRole token use to localhost. Remove or adjust for multi-host deployment. |
-| Internal CA is self-signed | PoC | For production, root the internal CA under your enterprise PKI. |
-| Plugin binary not SHA-pinned | Phase 1 | Plugin registration with SHA256 hash is implemented in the setup script. See Phase 3 for CI-automated binary signing. |
-| TLS cert on `cred-rotation-api` | Phase 2 | Server cert for the API's mTLS listener will be issued by the internal PKI in Phase 2. Phase 1 only establishes the CA. |
+| AppRole `secret_id` via env var | Local dev only | AppRole is the local-dev fallback. CI uses GitHub Actions OIDC; production uses SPIFFE JWT-SVID. See issue #16. |
+| `token_bound_cidrs=127.0.0.1/32` | PoC | Restricts AppRole token use to localhost. Not applicable once JWT/OIDC auth is in use (issue #16). |
+| Internal CA is self-signed | PoC | For production, root the internal CA under your enterprise PKI. ML-DSA cert support pending Vault PKI + Go x509 (issue #12). |
+| Plugin binary SHA verification | ✅ Complete | Plugin registration verifies SHA256 hash in the setup script. |
+| mTLS client cert authz | ✅ Complete | Per-endpoint CN allowlist enforced by `certAuthz` middleware; cert CN+serial logged on every request (issues #14, #15). |
+| Vault lease lifecycle | 🔄 In progress | `vault-auth0-engine` currently returns a plain `logical.Response`; Phase 5 adds `RenewFunc`/`RevokeFunc` to auto-revoke credentials at TTL expiry (issue #13). |
+| ML-DSA PQC certificates | ⏳ Blocked | mTLS key exchange is quantum-safe (X25519MLKEM768 in Go 1.24+). Certificate authentication needs ML-DSA, blocked on Vault PKI + `crypto/x509` support (issue #12, tracking hashicorp/vault#27239). |

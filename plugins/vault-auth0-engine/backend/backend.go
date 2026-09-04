@@ -12,12 +12,16 @@ package backend
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
 const pluginVersion = "v0.1.0"
+
+// SecretTypeAuth0Creds is the type name for dynamic Auth0 credential leases.
+const SecretTypeAuth0Creds = "auth0_creds"
 
 // Backend is the secrets engine implementation.
 type Backend struct {
@@ -31,6 +35,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 		BackendType: logical.TypeLogical,
 		Help:        backendHelp,
 		Paths:       b.paths(),
+		Secrets:     []*framework.Secret{b.secretAuth0Creds()},
 		PathsSpecial: &logical.Paths{
 			// Seal-wrap the config path so Management API credentials get an extra
 			// encryption layer (barrier encryption + seal encryption) at rest.
@@ -50,6 +55,23 @@ func (b *Backend) paths() []*framework.Path {
 		b.pathRotateRoot(),
 		b.pathCreds(),
 		b.pathStatus(),
+	}
+}
+
+func (b *Backend) secretAuth0Creds() *framework.Secret {
+	return &framework.Secret{
+		Type: SecretTypeAuth0Creds,
+		Fields: map[string]*framework.FieldSchema{
+			"application_client_id": {Type: framework.TypeString},
+			"credential":            {Type: framework.TypeString},
+			"credential_ciphertext": {Type: framework.TypeString},
+			"transit_key":           {Type: framework.TypeString},
+			"rotated_at":            {Type: framework.TypeString},
+		},
+		// Auth0 client_secrets don't expire; Vault owns the window.
+		DefaultDuration: 24 * time.Hour,
+		Renew:           b.renewCreds,
+		Revoke:          b.revokeCreds,
 	}
 }
 

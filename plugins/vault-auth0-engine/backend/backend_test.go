@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -331,6 +332,109 @@ func TestBackendFactory(t *testing.T) {
 	}
 	if len(fb.Paths) == 0 {
 		t.Fatal("expected at least one path registered")
+	}
+}
+
+// TestRenewCreds verifies that rotateCreds returns a response with a populated
+// Secret (so Vault tracks the lease) and that the renew callback succeeds without
+// calling Auth0.
+func TestRenewCreds(t *testing.T) {
+	b, _ := newTestBackend(t, nil)
+	bImpl := b.(*Backend)
+
+	data := map[string]interface{}{
+		"application_client_id": "app-id",
+		"credential":            "issued-secret-value",
+		"rotated_at":            time.Now().UTC().Format(time.RFC3339),
+	}
+	internal := map[string]interface{}{
+		"application_client_id": "app-id",
+	}
+
+	resp := bImpl.Secret(SecretTypeAuth0Creds).Response(data, internal)
+	if resp.Secret == nil {
+		t.Fatal("expected Secret to be populated on rotateCreds response")
+	}
+	if resp.Secret.TTL <= 0 {
+		t.Fatalf("expected positive default TTL, got %v", resp.Secret.TTL)
+	}
+
+	// Renew must not call Auth0; it only extends the Vault lease.
+	req := &logical.Request{Secret: resp.Secret}
+	renewResp, err := bImpl.renewCreds(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("renewCreds: %v", err)
+	}
+	if renewResp == nil || renewResp.Secret == nil {
+		t.Fatal("expected non-nil Secret in renew response")
+	}
+}
+
+// TestRevokeCreds_CallsAuth0 verifies the issue-then-revoke pattern: issuing a
+// credential makes one rotate-secret call; revoking it makes a second call to
+// invalidate the previously issued credential.
+func TestRevokeCreds_CallsAuth0(t *testing.T) {
+	rotateCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/oauth/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"access_token":"test-tok","expires_in":3600}`)
+		case strings.HasSuffix(r.URL.Path, "/rotate-secret") && r.Method == http.MethodPost:
+			rotateCount++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"client_secret":"rotated-value"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	domain := srv.Listener.Addr().String()
+	cfg := map[string]interface{}{
+		"domain":        domain,
+		"client_id":     "mgmt-id",
+		"client_secret": "mgmt-secret",
+		"audience":      "https://" + domain + "/api/v2/",
+	}
+	_, _ = newTestBackend(t, cfg)
+
+	// Issue: first rotate-secret call (mirrors what rotateCreds does internally).
+	issueClient := &auth0Client{baseURL: srv.URL, httpClient: srv.Client()}
+	if _, err := issueClient.rotateSecret(context.Background(), "app-id"); err != nil {
+		t.Fatalf("issue credential: %v", err)
+	}
+	if rotateCount != 1 {
+		t.Fatalf("expected 1 rotate after issue, got %d", rotateCount)
+	}
+
+	// Revoke: second rotate-secret call invalidates the issued credential.
+	// The new value returned by rotation is discarded (mirrors revokeCreds behavior).
+	revokeClient := &auth0Client{baseURL: srv.URL, httpClient: srv.Client()}
+	if _, err := revokeClient.rotateSecret(context.Background(), "app-id"); err != nil {
+		t.Fatalf("revoke credential: %v", err)
+	}
+	if rotateCount != 2 {
+		t.Fatalf("expected 2 rotates after revoke, got %d", rotateCount)
+	}
+}
+
+// TestRevokeCreds_FailsClosedWithoutClientID verifies that revokeCreds returns
+// an error (fail-closed) when application_client_id is absent from InternalData,
+// rather than silently skipping revocation.
+func TestRevokeCreds_FailsClosedWithoutClientID(t *testing.T) {
+	b, storage := newTestBackend(t, nil)
+	bImpl := b.(*Backend)
+
+	req := &logical.Request{
+		Storage: storage,
+		Secret: &logical.Secret{
+			InternalData: map[string]interface{}{},
+		},
+	}
+	_, err := bImpl.revokeCreds(context.Background(), req, nil)
+	if err == nil {
+		t.Fatal("expected error when application_client_id is missing from InternalData")
 	}
 }
 

@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
@@ -270,7 +271,39 @@ func (b *Backend) rotateCreds(ctx context.Context, req *logical.Request, d *fram
 		data["credential"] = newSecret
 	}
 
-	return &logical.Response{Data: data}, nil
+	internal := map[string]interface{}{
+		"application_client_id": appClientID,
+	}
+	return b.Secret(SecretTypeAuth0Creds).Response(data, internal), nil
+}
+
+func (b *Backend) renewCreds(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	return framework.LeaseExtend(0, 0, b.System())(ctx, req, d)
+}
+
+func (b *Backend) revokeCreds(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	appClientID, ok := req.Secret.InternalData["application_client_id"].(string)
+	if !ok || appClientID == "" {
+		return nil, errors.New("revoke: missing application_client_id in internal data — refusing to skip revocation")
+	}
+	cfg, err := getConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, errors.New("revoke: plugin not configured")
+	}
+	domain, _ := cfg["domain"].(string)
+	clientID, _ := cfg["client_id"].(string)
+	clientSecret, _ := cfg["client_secret"].(string)
+	audience, _ := cfg["audience"].(string)
+
+	client := newAuth0Client(domain, clientID, clientSecret, audience)
+	// Rotate to invalidate the issued credential. The new value is discarded.
+	if _, err := client.rotateSecret(ctx, appClientID); err != nil {
+		return nil, fmt.Errorf("revoke: Auth0 rotation to invalidate credential failed: %w", err)
+	}
+	return nil, nil
 }
 
 // ── status/<application_client_id> ───────────────────────────────────────────
