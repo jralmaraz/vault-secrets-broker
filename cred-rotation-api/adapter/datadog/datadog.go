@@ -160,9 +160,9 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		defer cancel()
 		if err := a.deleteKey(deleteCtx, oldID); err != nil {
 			a.logger.Warn("datadog: best-effort delete of old key failed",
-				"old_key_id", oldID,
-				"provider_id", req.ProviderID,
-				"err", err,
+				"old_key_id", sanitizeForLog(oldID),
+				"provider_id", sanitizeForLog(req.ProviderID),
+				"err", sanitizeForLog(err.Error()),
 			)
 		}
 	}
@@ -332,6 +332,29 @@ func randomHex(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// sanitizeForLog strips ASCII control characters (including CR/LF) from s and
+// truncates to 256 runes. This prevents log-injection attacks when user-supplied
+// values such as provider IDs, key IDs, or server error messages are written to
+// structured log entries. Normal values (UUIDs, provider names) are unaffected.
+func sanitizeForLog(s string) string {
+	const maxRunes = 256
+	var b strings.Builder
+	b.Grow(len(s))
+	n := 0
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f { // strip control chars and DEL
+			continue
+		}
+		b.WriteRune(r)
+		n++
+		if n >= maxRunes {
+			b.WriteString("…")
+			break
+		}
+	}
+	return b.String()
 }
 
 // ── response types ────────────────────────────────────────────────────────────

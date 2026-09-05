@@ -276,6 +276,44 @@ func TestRotate_OldKeyDeleteFailure_LogsAndSucceeds(t *testing.T) {
 	}
 }
 
+// TestRotate_LogInjection_KeyIDSanitized verifies that a newline-embedded old_key_id
+// does not produce multi-line log output (CWE-117 guard).
+func TestRotate_LogInjection_KeyIDSanitized(t *testing.T) {
+	injectedID := "legit-prefix\nfake-log-entry: injected"
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"/api/v2/api_keys": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write(ddCreateResponse("svc-ts"))
+			}
+		},
+		// The injected ID won't match any handler — delete will get a 404 or connection refused,
+		// triggering the Warn path.
+	})
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	a := newAdapter(t, srv, datadog.WithLogger(logger))
+	_, err := a.Rotate(context.Background(), adapter.RotateRequest{
+		ProviderID: "svc",
+		Meta:       map[string]string{"old_key_id": injectedID},
+	})
+	if err != nil {
+		t.Fatalf("Rotate should succeed, got: %v", err)
+	}
+
+	logged := logBuf.String()
+	// The raw newline must NOT appear in the log.
+	if strings.Contains(logged, "\n"+strings.Split(injectedID, "\n")[1]) {
+		t.Errorf("log injection not sanitized — newline present in log output: %q", logged)
+	}
+	// The safe prefix should still appear.
+	if !strings.Contains(logged, "legit-prefix") {
+		t.Errorf("expected safe prefix in log, got: %q", logged)
+	}
+}
+
 func TestRotate_APIError(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"/api/v2/api_keys": func(w http.ResponseWriter, _ *http.Request) {
