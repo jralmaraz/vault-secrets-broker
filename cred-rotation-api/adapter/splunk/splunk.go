@@ -37,7 +37,7 @@ const (
 	adapterName  = "splunk"
 	httpTimeout  = 15 * time.Second
 	bodyLimit    = 1 << 20 // 1 MiB
-	tokenTimeFmt = "20060102T150405Z"
+	tokenTimeFmt = "20060102T150405.000Z"
 )
 
 // Adapter rotates Splunk HEC tokens via the Splunk REST management API.
