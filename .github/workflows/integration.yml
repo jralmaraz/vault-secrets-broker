@@ -177,3 +177,114 @@ jobs:
           go test -tags=integration -race -v -timeout 120s \
             -run 'TestNew_(AppRole|JWT)' \
             ./vault/...
+
+  # ── Splunk HEC token rotation integration tests ───────────────────────────────
+  # Uses the official splunk/splunk Docker image — no trial account required.
+  # Tests the full rotate → status → revoke lifecycle against a real Splunk REST API.
+  splunk-adapter:
+    name: Splunk adapter integration
+    runs-on: ubuntu-latest
+
+    services:
+      splunk:
+        image: splunk/splunk:latest
+        env:
+          SPLUNK_GENERAL_TERMS: --accept-sgt-current-at-splunk-com
+          SPLUNK_START_ARGS: --accept-license
+          SPLUNK_PASSWORD: changeme123!
+        ports:
+          - 8089:8089
+          - 8088:8088
+        options: >-
+          --health-cmd "curl -sk -o /dev/null -w '%{http_code}' https://localhost:8089/services/server/info -u admin:changeme123! | grep -q '^2'"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cred-rotation-api/go.mod
+
+      - name: Enable HEC in Splunk
+        run: |
+          # Enable the HEC global endpoint (disabled by default in Docker image).
+          curl -sk -u admin:changeme123! \
+            https://localhost:8089/services/data/inputs/http/http \
+            -d enableSSL=1 -d disabled=0 -o /dev/null -w "%{http_code}\n"
+          sleep 2
+
+      - name: Ensure test output file exists
+        if: always()
+        run: touch /tmp/splunk-test-output.txt
+
+      - name: Run Splunk adapter integration tests
+        id: splunk-tests
+        working-directory: cred-rotation-api
+        env:
+          SPLUNK_BASE_URL: https://localhost:8089
+          SPLUNK_AUTH_TOKEN: "admin:changeme123!"
+          SPLUNK_INSECURE: "true"
+        run: |
+          go test -tags=integration -race -v -timeout 180s \
+            -run TestSplunk \
+            ./adapter/splunk/... 2>&1 | tee /tmp/splunk-test-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Post Splunk test results as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.existsSync('/tmp/splunk-test-output.txt')
+              ? fs.readFileSync('/tmp/splunk-test-output.txt', 'utf8')
+              : '(no output — Splunk container failed to start)';
+            const exitCode = '${{ steps.splunk-tests.outputs.exit_code }}';
+            const status = exitCode === '0' ? '✅ PASSED' : '❌ FAILED';
+            const sha = context.sha.slice(0, 7);
+
+            const body = [
+              `## Integration Test Results — Splunk HEC adapter ${status}`,
+              ``,
+              `**Commit**: \`${sha}\`  **Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              ``,
+              `Tests exercise the full HEC token lifecycle against a \`splunk/splunk\` Docker container:`,
+              `rotate → status (active) → rotate-with-delete-old → status (old=inactive) → revoke → status (gone).`,
+              ``,
+              `<details><summary>Full test output</summary>`,
+              ``,
+              '```',
+              output.slice(0, 60000),
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments.data) {
+              if (comment.user.type === 'Bot' &&
+                  comment.body.includes('Integration Test Results — Splunk HEC adapter')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail job if Splunk tests failed
+        if: steps.splunk-tests.outputs.exit_code != '0'
+        run: exit 1
