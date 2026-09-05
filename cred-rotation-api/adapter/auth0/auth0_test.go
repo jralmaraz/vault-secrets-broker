@@ -2,6 +2,7 @@ package auth0_test
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -185,5 +186,35 @@ func TestNew_MissingFields(t *testing.T) {
 	_, err := auth0.New(auth0.Config{Domain: "d"}) // missing ClientID, ClientSecret, Audience
 	if err == nil {
 		t.Fatal("expected error on missing config fields, got nil")
+	}
+}
+
+func TestNew_TLSMinVersion(t *testing.T) {
+	// Verify the adapter enforces TLS 1.3 minimum.
+	// The TLS client handshakes against a TLS 1.2-only server must be rejected.
+	tls12Only := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	tls12Only.TLS = &tls.Config{
+		MaxVersion: tls.VersionTLS12, // forbid TLS 1.3
+	}
+	tls12Only.StartTLS()
+	defer tls12Only.Close()
+
+	a, err := auth0.New(auth0.Config{
+		Domain:       "example.auth0.com",
+		ClientID:     "cid",
+		ClientSecret: "secret",
+		Audience:     "https://example.auth0.com/api/v2/",
+	}, auth0.WithBaseURL(tls12Only.URL))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Any call that requires a network hop should fail because TLS 1.3 is
+	// required but the server only offers TLS 1.2.
+	_, err = a.Status(context.Background(), "some-client-id")
+	if err == nil {
+		t.Fatal("expected TLS handshake error against TLS 1.2-only server")
 	}
 }
