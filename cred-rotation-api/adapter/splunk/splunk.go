@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,10 +35,11 @@ import (
 )
 
 const (
-	adapterName  = "splunk"
-	httpTimeout  = 15 * time.Second
-	bodyLimit    = 1 << 20 // 1 MiB
-	tokenTimeFmt = "20060102T150405.000Z"
+	adapterName      = "splunk"
+	httpTimeout      = 15 * time.Second
+	bodyLimit        = 1 << 20 // 1 MiB
+	tokenTimeFmt     = "20060102T150405.000Z"
+	deleteOldTimeout = 10 * time.Second
 )
 
 // Adapter rotates Splunk HEC tokens via the Splunk REST management API.
@@ -45,6 +47,7 @@ type Adapter struct {
 	baseURL    string // e.g. "https://splunk.example.com:8089"
 	authToken  string // Splunk management token
 	httpClient *http.Client
+	logger     *slog.Logger
 
 	// Defaults applied when creating new HEC tokens.
 	defaultIndex      string
@@ -70,6 +73,12 @@ type Option func(*Adapter)
 // WithBaseURL overrides the default BaseURL (for unit tests using httptest).
 func WithBaseURL(u string) Option {
 	return func(a *Adapter) { a.baseURL = u }
+}
+
+// WithLogger sets the logger used for best-effort operation warnings (e.g. old-token
+// deletion failures). Defaults to the discarding no-op logger if not set.
+func WithLogger(l *slog.Logger) Option {
+	return func(a *Adapter) { a.logger = l }
 }
 
 // New constructs a Splunk adapter from Config.
@@ -100,6 +109,7 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 			Timeout:   httpTimeout,
 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 		},
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		defaultIndex:      cfg.DefaultIndex,
 		defaultSourcetype: cfg.DefaultSourcetype,
 	}
@@ -130,8 +140,21 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 	// Best-effort deletion of the old token. The new credential is already live
 	// so we do NOT fail the rotation if this step errors — callers should use
 	// Revoke explicitly if they need a hard guarantee.
+	//
+	// Intentionally detached from the caller's context: if the handler deadline
+	// has already fired (or fires during the delete), the caller's ctx is
+	// cancelled and the delete would silently no-op, leaving the old token alive
+	// with no trace. An independent timeout gives this cleanup its own budget.
 	if old, ok := req.Meta["old_token_name"]; ok && old != "" {
-		_ = a.deleteToken(ctx, old)
+		deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
+		defer cancel()
+		if err := a.deleteToken(deleteCtx, old); err != nil {
+			a.logger.Warn("splunk: best-effort delete of old token failed",
+				"old_token", old,
+				"provider_id", req.ProviderID,
+				"err", err,
+			)
+		}
 	}
 
 	return adapter.Result{

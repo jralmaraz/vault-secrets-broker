@@ -3,6 +3,7 @@ package splunk_test
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -353,5 +354,58 @@ func TestRotate_SendsAuthorizationHeader(t *testing.T) {
 	got := strings.TrimPrefix(gotAuth, wantPrefix)
 	if got != fakeAuthToken {
 		t.Errorf("auth token = %q, want %q", got, fakeAuthToken)
+	}
+}
+
+// TestRotate_DeleteOldToken_LogsFailure verifies that when best-effort deletion
+// of the old token fails, the error is logged via the adapter's logger rather
+// than being silently dropped. This tests the new observable behaviour added
+// alongside the context-detachment fix.
+func TestRotate_DeleteOldToken_LogsFailure(t *testing.T) {
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"/services/data/inputs/http": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(splunkResp(splunkEntry{
+				Name:    "app-new",
+				Content: splunkContent{Token: fakeToken},
+			}))
+		},
+		"/services/data/inputs/http/old-token": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				// Simulate Splunk returning an error on delete.
+				http.Error(w, `{"messages":[{"type":"ERROR","text":"internal error"}]}`,
+					http.StatusInternalServerError)
+			}
+		},
+	})
+
+	// Capture log output via a pipe-backed slog handler.
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	a, err := splunk.New(splunk.Config{
+		BaseURL:   srv.URL,
+		AuthToken: fakeAuthToken,
+	}, splunk.WithBaseURL(srv.URL), splunk.WithLogger(logger))
+	if err != nil {
+		t.Fatalf("splunk.New: %v", err)
+	}
+
+	// Rotate must succeed even though old-token delete fails.
+	_, err = a.Rotate(context.Background(), adapter.RotateRequest{
+		ProviderID: "app",
+		Meta:       map[string]string{"old_token_name": "old-token"},
+	})
+	if err != nil {
+		t.Fatalf("Rotate should succeed despite delete failure, got: %v", err)
+	}
+
+	// The failure must appear in the log.
+	logged := logBuf.String()
+	if !strings.Contains(logged, "best-effort delete of old token failed") {
+		t.Errorf("expected warning in log, got: %q", logged)
+	}
+	if !strings.Contains(logged, "old-token") {
+		t.Errorf("expected old token name in log, got: %q", logged)
 	}
 }
