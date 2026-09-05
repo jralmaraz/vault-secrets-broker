@@ -19,7 +19,8 @@ package splunk_test
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -63,8 +64,9 @@ func splunkIntegClient(t *testing.T) *splunk.Adapter {
 	return a
 }
 
-// splunkSessionToken exchanges "user:pass" for a Splunk session token via /services/auth/login.
+// splunkSessionToken exchanges "user:pass" for a Splunk session key via /services/auth/login.
 // If rawCred doesn't contain ":", it's assumed to be a bearer token already.
+// The returned session key is used as a Bearer token on subsequent management API calls.
 func splunkSessionToken(baseURL, rawCred string) (string, error) {
 	if !strings.Contains(rawCred, ":") {
 		return rawCred, nil // already a bearer token
@@ -93,8 +95,6 @@ func splunkSessionToken(baseURL, rawCred string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	// Basic auth as fallback for session endpoint.
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(rawCred)))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -106,8 +106,16 @@ func splunkSessionToken(baseURL, rawCred string) (string, error) {
 		return "", fmt.Errorf("auth/login: status %d", resp.StatusCode)
 	}
 
-	// Return Basic auth header value for simplicity — Splunk accepts it on all management endpoints.
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(rawCred)), nil
+	var result struct {
+		SessionKey string `json:"sessionKey"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("auth/login: parse response: %w", err)
+	}
+	if result.SessionKey == "" {
+		return "", errors.New("auth/login: empty sessionKey in response")
+	}
+	return result.SessionKey, nil
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
