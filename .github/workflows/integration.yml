@@ -189,7 +189,7 @@ jobs:
       splunk:
         image: splunk/splunk:latest
         env:
-          SPLUNK_START_ARGS: --accept-license
+          SPLUNK_START_ARGS: --accept-sgt-current-at-splunk-com --accept-license
           SPLUNK_GENERAL_TERMS: "yes"
           SPLUNK_PASSWORD: changeme123!
         ports:
@@ -216,6 +216,10 @@ jobs:
             -d enableSSL=1 -d disabled=0 -o /dev/null -w "%{http_code}\n"
           sleep 2
 
+      - name: Ensure test output file exists
+        if: always()
+        run: touch /tmp/splunk-test-output.txt
+
       - name: Run Splunk adapter integration tests
         id: splunk-tests
         working-directory: cred-rotation-api
@@ -224,7 +228,6 @@ jobs:
           SPLUNK_AUTH_TOKEN: "admin:changeme123!"
           SPLUNK_INSECURE: "true"
         run: |
-          touch /tmp/splunk-test-output.txt
           go test -tags=integration -race -v -timeout 180s \
             -run TestSplunk \
             ./adapter/splunk/... 2>&1 | tee /tmp/splunk-test-output.txt
@@ -236,7 +239,9 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const output = fs.readFileSync('/tmp/splunk-test-output.txt', 'utf8');
+            const output = fs.existsSync('/tmp/splunk-test-output.txt')
+              ? fs.readFileSync('/tmp/splunk-test-output.txt', 'utf8')
+              : '(no output — Splunk container failed to start)';
             const exitCode = '${{ steps.splunk-tests.outputs.exit_code }}';
             const status = exitCode === '0' ? '✅ PASSED' : '❌ FAILED';
             const sha = context.sha.slice(0, 7);
