@@ -15,6 +15,7 @@ import (
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 	auth0adapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/auth0"
+	datadogadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/datadog"
 	githubadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/github"
 	splunkadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/splunk"
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/server"
@@ -73,10 +74,20 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("build github adapter: %w", err)
 	}
 
+	datadogCfg, err := loadDatadogConfig(ctx, vc, transitKeyName)
+	if err != nil {
+		return fmt.Errorf("load datadog config: %w", err)
+	}
+	datadogAdapter, err := datadogadapter.New(datadogCfg, datadogadapter.WithLogger(logger))
+	if err != nil {
+		return fmt.Errorf("build datadog adapter: %w", err)
+	}
+
 	reg := adapter.NewRegistry()
 	reg.Register(auth0Adapter)
 	reg.Register(splunkAdapter)
 	reg.Register(githubAdapter)
+	reg.Register(datadogAdapter)
 	logger.Info("adapters registered", "providers", reg.Names())
 
 	// ── mTLS TLS config ───────────────────────────────────────────────────────
@@ -219,6 +230,49 @@ func loadGitHubConfig(ctx context.Context, vc *vclient.Client, transitKey string
 	// base_url is optional — absent means api.github.com (production).
 	if baseURL, _ := vclient.StringField(data, "base_url"); baseURL != "" {
 		cfg.BaseURL = baseURL
+	}
+	return cfg, nil
+}
+
+// loadDatadogConfig reads Datadog adapter configuration from Vault KV v2 and
+// decrypts the management API key and App key using Transit before returning.
+func loadDatadogConfig(ctx context.Context, vc *vclient.Client, transitKey string) (datadogadapter.Config, error) {
+	const kvPath = "secret/data/cred-rotation-api/adapters/datadog"
+
+	data, err := vc.KVGet(ctx, kvPath)
+	if err != nil {
+		return datadogadapter.Config{}, fmt.Errorf("kv read %s: %w", kvPath, err)
+	}
+
+	encryptedAPIKey, err := vclient.StringField(data, "admin_api_key_encrypted")
+	if err != nil {
+		return datadogadapter.Config{}, err
+	}
+	encryptedAppKey, err := vclient.StringField(data, "admin_app_key_encrypted")
+	if err != nil {
+		return datadogadapter.Config{}, err
+	}
+
+	plainAPIKey, err := vc.TransitDecrypt(ctx, transitKey, encryptedAPIKey)
+	if err != nil {
+		return datadogadapter.Config{}, fmt.Errorf("transit decrypt admin_api_key: %w", err)
+	}
+	plainAppKey, err := vc.TransitDecrypt(ctx, transitKey, encryptedAppKey)
+	if err != nil {
+		return datadogadapter.Config{}, fmt.Errorf("transit decrypt admin_app_key: %w", err)
+	}
+
+	cfg := datadogadapter.Config{
+		AdminAPIKey: plainAPIKey,
+		AdminAppKey: plainAppKey,
+	}
+	// base_url is optional — absent means api.datadoghq.com (US1).
+	if baseURL, _ := vclient.StringField(data, "base_url"); baseURL != "" {
+		cfg.BaseURL = baseURL
+	}
+	// key_type is optional — absent means api_key.
+	if keyType, _ := vclient.StringField(data, "key_type"); keyType != "" {
+		cfg.KeyType = keyType
 	}
 	return cfg, nil
 }
