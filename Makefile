@@ -82,6 +82,11 @@ test-integration:
 test-integration-auth:
 	@source .vault-env && cd cred-rotation-api && $(GO) test -tags=integration -race -v -run 'TestNew_(AppRole|JWT)' ./vault/...
 
+# GitHub adapter integration tests — requires GITHUB_ADMIN_PAT env var.
+test-integration-github:
+	@cd cred-rotation-api && $(GO) test -tags=integration -race -v \
+		-run TestGitHub ./adapter/github/...
+
 # ── Hooks — install git hooks that gate on fmt/vet/vuln/lint before push ───────
 
 hooks:
