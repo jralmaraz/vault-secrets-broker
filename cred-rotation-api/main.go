@@ -59,7 +59,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load splunk config: %w", err)
 	}
-	splunkAdapter, err := splunkadapter.New(splunkCfg)
+	splunkAdapter, err := splunkadapter.New(splunkCfg, splunkadapter.WithLogger(logger))
 	if err != nil {
 		return fmt.Errorf("build splunk adapter: %w", err)
 	}
