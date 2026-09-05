@@ -13,14 +13,14 @@ import (
 )
 
 const (
-	fakeToken    = "aabbccdd-1111-2222-3333-ffffffffffff"
+	fakeToken     = "aabbccdd-1111-2222-3333-ffffffffffff"
 	fakeAuthToken = "admin-management-token"
 )
 
 // splunkEntry mirrors the Splunk REST response shape for test servers.
 type splunkEntry struct {
-	Name    string         `json:"name"`
-	Content splunkContent  `json:"content"`
+	Name    string        `json:"name"`
+	Content splunkContent `json:"content"`
 }
 
 type splunkContent struct {
@@ -118,7 +118,7 @@ func TestRotate_Success(t *testing.T) {
 			createCalled = true
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write(splunkResp(splunkEntry{
-				Name: "prod-app-20260905T120000Z",
+				Name:    "prod-app-20260905T120000Z",
 				Content: splunkContent{Token: fakeToken, Index: "main"},
 			}))
 		},

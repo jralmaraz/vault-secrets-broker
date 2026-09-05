@@ -34,10 +34,10 @@ import (
 )
 
 const (
-	adapterName   = "splunk"
-	httpTimeout   = 15 * time.Second
-	bodyLimit     = 1 << 20 // 1 MiB
-	tokenTimeFmt  = "20060102T150405Z"
+	adapterName  = "splunk"
+	httpTimeout  = 15 * time.Second
+	bodyLimit    = 1 << 20 // 1 MiB
+	tokenTimeFmt = "20060102T150405Z"
 )
 
 // Adapter rotates Splunk HEC tokens via the Splunk REST management API.
@@ -273,8 +273,8 @@ type splunkEntry struct {
 }
 
 type splunkContent struct {
-	Disabled  bool   `json:"disabled"`
-	Index     string `json:"index"`
+	Disabled   bool   `json:"disabled"`
+	Index      string `json:"index"`
 	Sourcetype string `json:"sourcetype"`
-	Token     string `json:"token"` // only present in create/get responses
+	Token      string `json:"token"` // only present in create/get responses
 }
