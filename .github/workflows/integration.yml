@@ -130,23 +130,53 @@ jobs:
         if: steps.run-tests.outputs.exit_code != '0'
         run: exit 1
 
-  # ── cred-rotation-api integration tests (auth methods wired in PR #24) ───────
+  # ── cred-rotation-api integration tests — auth methods ──────────────────────
+  # Tests AppRole and JWT/OIDC auth paths in vault/client.go against a live
+  # Vault dev server. No external secrets required — the JWT test uses a
+  # self-contained JWKS httptest.Server with an ephemeral ECDSA key.
+  # SPIFFE/SPIRE auth is validated by unit tests only (no SPIRE agent in CI).
   cred-rotation-api:
     name: cred-rotation-api integration
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-go@v7
         with:
           go-version-file: cred-rotation-api/go.mod
-      - name: Run integration tests
+
+      - name: Start Vault dev server
+        run: |
+          VAULT_VERSION="1.19.4"
+          TMP=$(mktemp -d)
+          wget -q -O "$TMP/vault.zip" \
+            "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip"
+          unzip -q "$TMP/vault.zip" -d "$TMP"
+          mkdir -p "$HOME/.local/bin"
+          cp "$TMP/vault" "$HOME/.local/bin/vault"
+          chmod 755 "$HOME/.local/bin/vault"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          "$HOME/.local/bin/vault" server -dev -dev-root-token-id=root \
+            -dev-listen-address=127.0.0.1:8200 &
+          sleep 2
+          echo "VAULT_ADDR=http://127.0.0.1:8200" >> "$GITHUB_ENV"
+          echo "VAULT_TOKEN=root"                 >> "$GITHUB_ENV"
+
+      - name: Enable required Vault engines
+        run: |
+          export VAULT_ADDR=http://127.0.0.1:8200
+          export VAULT_TOKEN=root
+          vault auth enable approle  || true
+          vault auth enable jwt      || true
+
+      - name: Run auth method integration tests
         working-directory: cred-rotation-api
         run: |
-          if go list -tags=integration ./... 2>/dev/null | grep -q .; then
-            go test -tags=integration -v -timeout 120s ./...
-          else
-            echo "No integration tests found in cred-rotation-api — skipping"
-          fi
+          go test -tags=integration -race -v -timeout 120s \
+            -run 'TestNew_(AppRole|JWT)' \
+            ./vault/...
 
   # ── Splunk HEC token rotation integration tests ───────────────────────────────
   # Uses the official splunk/splunk Docker image — no trial account required.
