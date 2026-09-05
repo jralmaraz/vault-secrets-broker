@@ -8,6 +8,7 @@ package auth0
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,7 +60,7 @@ func WithBaseURL(u string) Option {
 	return func(a *Adapter) { a.baseURL = u }
 }
 
-// New constructs an Auth0 adapter.
+// New constructs an Auth0 adapter enforcing TLS 1.3 minimum.
 func New(cfg Config, opts ...Option) (*Adapter, error) {
 	if cfg.Domain == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.Audience == "" {
 		return nil, errors.New("auth0: all Config fields are required")
@@ -70,7 +71,14 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 		clientSecret: cfg.ClientSecret,
 		audience:     cfg.Audience,
 		baseURL:      "https://" + cfg.Domain,
-		httpClient:   &http.Client{Timeout: httpClientTimeout},
+		httpClient: &http.Client{
+			Timeout: httpClientTimeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					MinVersion: tls.VersionTLS13,
+				},
+			},
+		},
 	}
 	for _, o := range opts {
 		o(a)
