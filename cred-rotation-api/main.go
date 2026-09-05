@@ -15,6 +15,8 @@ import (
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 	auth0adapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/auth0"
+	githubadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/github"
+	splunkadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/splunk"
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/server"
 	vclient "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/vault"
 )
@@ -48,14 +50,33 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load auth0 config: %w", err)
 	}
-
 	auth0Adapter, err := auth0adapter.New(auth0Cfg)
 	if err != nil {
 		return fmt.Errorf("build auth0 adapter: %w", err)
 	}
 
+	splunkCfg, err := loadSplunkConfig(ctx, vc, transitKeyName)
+	if err != nil {
+		return fmt.Errorf("load splunk config: %w", err)
+	}
+	splunkAdapter, err := splunkadapter.New(splunkCfg)
+	if err != nil {
+		return fmt.Errorf("build splunk adapter: %w", err)
+	}
+
+	githubCfg, err := loadGitHubConfig(ctx, vc, transitKeyName)
+	if err != nil {
+		return fmt.Errorf("load github config: %w", err)
+	}
+	githubAdapter, err := githubadapter.New(githubCfg)
+	if err != nil {
+		return fmt.Errorf("build github adapter: %w", err)
+	}
+
 	reg := adapter.NewRegistry()
 	reg.Register(auth0Adapter)
+	reg.Register(splunkAdapter)
+	reg.Register(githubAdapter)
 	logger.Info("adapters registered", "providers", reg.Names())
 
 	// ── mTLS TLS config ───────────────────────────────────────────────────────
@@ -131,6 +152,75 @@ func loadAuth0Config(ctx context.Context, vc *vclient.Client, transitKey string)
 		ClientSecret: plainSecret,
 		Audience:     audience,
 	}, nil
+}
+
+// loadSplunkConfig reads Splunk adapter configuration from Vault KV v2 and
+// decrypts the management token using Transit before returning.
+func loadSplunkConfig(ctx context.Context, vc *vclient.Client, transitKey string) (splunkadapter.Config, error) {
+	const kvPath = "secret/data/cred-rotation-api/adapters/splunk"
+
+	data, err := vc.KVGet(ctx, kvPath)
+	if err != nil {
+		return splunkadapter.Config{}, fmt.Errorf("kv read %s: %w", kvPath, err)
+	}
+
+	baseURL, err := vclient.StringField(data, "base_url")
+	if err != nil {
+		return splunkadapter.Config{}, err
+	}
+	encryptedToken, err := vclient.StringField(data, "auth_token_encrypted")
+	if err != nil {
+		return splunkadapter.Config{}, err
+	}
+
+	plainToken, err := vc.TransitDecrypt(ctx, transitKey, encryptedToken)
+	if err != nil {
+		return splunkadapter.Config{}, fmt.Errorf("transit decrypt auth_token: %w", err)
+	}
+
+	// Optional fields — absent means Splunk default.
+	cfg := splunkadapter.Config{
+		BaseURL:   baseURL,
+		AuthToken: plainToken,
+	}
+	if idx, _ := vclient.StringField(data, "default_index"); idx != "" {
+		cfg.DefaultIndex = idx
+	}
+	if st, _ := vclient.StringField(data, "default_sourcetype"); st != "" {
+		cfg.DefaultSourcetype = st
+	}
+	if caCert, _ := vclient.StringField(data, "ca_cert"); caCert != "" {
+		cfg.CACert = caCert
+	}
+	return cfg, nil
+}
+
+// loadGitHubConfig reads GitHub adapter configuration from Vault KV v2 and
+// decrypts the admin PAT using Transit before returning.
+func loadGitHubConfig(ctx context.Context, vc *vclient.Client, transitKey string) (githubadapter.Config, error) {
+	const kvPath = "secret/data/cred-rotation-api/adapters/github"
+
+	data, err := vc.KVGet(ctx, kvPath)
+	if err != nil {
+		return githubadapter.Config{}, fmt.Errorf("kv read %s: %w", kvPath, err)
+	}
+
+	encryptedPAT, err := vclient.StringField(data, "admin_pat_encrypted")
+	if err != nil {
+		return githubadapter.Config{}, err
+	}
+
+	plainPAT, err := vc.TransitDecrypt(ctx, transitKey, encryptedPAT)
+	if err != nil {
+		return githubadapter.Config{}, fmt.Errorf("transit decrypt admin_pat: %w", err)
+	}
+
+	cfg := githubadapter.Config{AdminPAT: plainPAT}
+	// base_url is optional — absent means api.github.com (production).
+	if baseURL, _ := vclient.StringField(data, "base_url"); baseURL != "" {
+		cfg.BaseURL = baseURL
+	}
+	return cfg, nil
 }
 
 // buildTLSConfig issues a server certificate from Vault PKI and assembles the mTLS config.
