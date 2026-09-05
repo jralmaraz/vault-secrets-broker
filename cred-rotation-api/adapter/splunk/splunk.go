@@ -54,10 +54,12 @@ type Adapter struct {
 // Config carries parameters needed to construct the Splunk adapter.
 // AuthToken is the Splunk management token (plaintext, decrypted from Vault Transit at startup).
 // CACert is an optional PEM-encoded CA certificate for TLS verification; uses the system pool if empty.
+// Insecure disables TLS certificate verification — only for local Docker CI, never production.
 type Config struct {
 	BaseURL           string // https://splunk.example.com:8089
 	AuthToken         string // plaintext — decrypted by vault.Client before passing here
 	CACert            string // PEM-encoded CA cert (optional)
+	Insecure          bool   // skip TLS verification; for CI only — never production
 	DefaultIndex      string // Splunk index for new tokens (optional, e.g. "main")
 	DefaultSourcetype string // sourcetype for new tokens (optional, e.g. "_json")
 }
@@ -79,7 +81,10 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 		return nil, errors.New("splunk: AuthToken is required")
 	}
 
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	tlsCfg := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: cfg.Insecure, //nolint:gosec // only for local Docker integration tests, never production
+	}
 	if cfg.CACert != "" {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(cfg.CACert)) {

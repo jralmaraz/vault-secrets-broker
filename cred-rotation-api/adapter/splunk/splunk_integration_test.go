@@ -53,6 +53,7 @@ func splunkIntegClient(t *testing.T) *splunk.Adapter {
 	a, err := splunk.New(splunk.Config{
 		BaseURL:           baseURL,
 		AuthToken:         authToken,
+		Insecure:          os.Getenv("SPLUNK_INSECURE") == "true",
 		DefaultIndex:      "main",
 		DefaultSourcetype: "_json",
 	}, splunk.WithBaseURL(baseURL))
