@@ -73,8 +73,14 @@ test-api:
 test: test-rest-engine test-auth0-engine test-api
 
 # Integration tests require a running Vault dev server (make setup first).
+# Covers: Transit round-trip, KV read, PKI issuance, AppRole auth, JWT/OIDC auth (with self-contained JWKS server).
+# SPIFFE/SPIRE auth is validated by unit tests in client_unit_test.go (audience guard) and requires a live SPIRE agent.
 test-integration:
 	@source .vault-env && cd cred-rotation-api && $(GO) test -tags=integration -race -v ./vault/...
+
+# Run only auth method integration tests (AppRole + JWT).
+test-integration-auth:
+	@source .vault-env && cd cred-rotation-api && $(GO) test -tags=integration -race -v -run 'TestNew_(AppRole|JWT)' ./vault/...
 
 # ── Hooks — install git hooks that gate on fmt/vet/vuln/lint before push ───────
 
