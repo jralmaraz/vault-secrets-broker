@@ -196,10 +196,10 @@ jobs:
           - 8089:8089
           - 8088:8088
         options: >-
-          --health-cmd "curl -sk https://localhost:8089/services/server/info?output_mode=json -u admin:changeme123! | grep -q splunkVersion"
+          --health-cmd "curl -sk -o /dev/null -w '%{http_code}' https://localhost:8089/services/server/info -u admin:changeme123! | grep -q '^2'"
           --health-interval 15s
           --health-timeout 10s
-          --health-retries 12
+          --health-retries 20
 
     steps:
       - uses: actions/checkout@v7
