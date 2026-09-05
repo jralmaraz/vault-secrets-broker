@@ -51,7 +51,9 @@ const (
 	tokenTimeFmt     = "20060102T150405.000Z"
 	deleteOldTimeout = 10 * time.Second
 
+	// KeyTypeAPI selects Datadog API key management (DD-API-KEY family).
 	KeyTypeAPI = "api_key"
+	// KeyTypeApp selects Datadog Application key management (DD-APPLICATION-KEY family).
 	KeyTypeApp = "app_key"
 )
 
