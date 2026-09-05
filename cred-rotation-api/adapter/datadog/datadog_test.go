@@ -20,16 +20,16 @@ const (
 	fakeKeyVal = "secretkeyvalue1234567890abcdef"
 )
 
-// ddCreateResponse builds a minimal Datadog create response.
-func ddCreateResponse(name, keyVal string) []byte {
+// ddCreateResponse builds a minimal Datadog create response using the package-level fakeKeyID and fakeKeyVal.
+func ddCreateResponse(name string) []byte {
 	b, _ := json.Marshal(map[string]interface{}{
 		"data": map[string]interface{}{
 			"id":   fakeKeyID,
 			"type": "api_keys",
 			"attributes": map[string]interface{}{
 				"name":  name,
-				"key":   keyVal,
-				"last4": keyVal[len(keyVal)-4:],
+				"key":   fakeKeyVal,
+				"last4": fakeKeyVal[len(fakeKeyVal)-4:],
 			},
 		},
 	})
@@ -138,7 +138,7 @@ func TestRotate_Success(t *testing.T) {
 			}
 			createCalled = true
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write(ddCreateResponse("prod-app-ts", fakeKeyVal))
+			_, _ = w.Write(ddCreateResponse("prod-app-ts"))
 		},
 	})
 
@@ -185,7 +185,7 @@ func TestRotate_NameContainsTimestampAndRandomSuffix(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			capturedName = body.Data.Attributes.Name
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write(ddCreateResponse(capturedName, fakeKeyVal))
+			_, _ = w.Write(ddCreateResponse(capturedName))
 		},
 	})
 
@@ -216,7 +216,7 @@ func TestRotate_DeletesOldKey(t *testing.T) {
 		"/api/v2/api_keys": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(ddCreateResponse("svc-ts", fakeKeyVal))
+				_, _ = w.Write(ddCreateResponse("svc-ts"))
 			}
 		},
 		"/api/v2/api_keys/old-key-id-0000": func(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +245,7 @@ func TestRotate_OldKeyDeleteFailure_LogsAndSucceeds(t *testing.T) {
 		"/api/v2/api_keys": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(ddCreateResponse("svc-ts", fakeKeyVal))
+				_, _ = w.Write(ddCreateResponse("svc-ts"))
 			}
 		},
 		"/api/v2/api_keys/old-key-id-fail": func(w http.ResponseWriter, r *http.Request) {
@@ -492,7 +492,7 @@ func TestRotate_SendsAuthHeaders(t *testing.T) {
 				gotAPIKey = r.Header.Get("DD-API-KEY")
 				gotAppKey = r.Header.Get("DD-APPLICATION-KEY")
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(ddCreateResponse("svc-ts", fakeKeyVal))
+				_, _ = w.Write(ddCreateResponse("svc-ts"))
 			}
 		},
 	})
