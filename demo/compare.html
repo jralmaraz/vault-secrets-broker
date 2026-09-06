@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Native Plugin vs Generic REST Engine</title>
+<style>
+/* ── Tokens ── */
+:root {
+  --bg:        #0c0f1a;
+  --surface:   #131826;
+  --surface2:  #1a2133;
+  --surface3:  #212942;
+  --border:    #2a3450;
+  --text:      #e2e8f8;
+  --text-dim:  #8fa3cc;
+  --muted:     #566080;
+
+  --purple:    #7c5cfc;
+  --purple-lt: rgba(124,92,252,.14);
+  --cyan:      #22d3ee;
+  --cyan-lt:   rgba(34,211,238,.1);
+  --green:     #34d399;
+  --green-lt:  rgba(52,211,153,.1);
+  --amber:     #fbbf24;
+  --amber-lt:  rgba(251,191,36,.1);
+  --red:       #f87171;
+  --red-lt:    rgba(248,113,113,.1);
+  --blue:      #60a5fa;
+  --blue-lt:   rgba(96,165,250,.1);
+
+  --a-color:   #7c5cfc;   /* approach A — native plugin */
+  --b-color:   #22d3ee;   /* approach B — generic REST  */
+  --a-lt:      rgba(124,92,252,.1);
+  --b-lt:      rgba(34,211,238,.1);
+
+  --mono: "SF Mono","Cascadia Code","Fira Code",Menlo,monospace;
+  --shadow: 0 4px 24px rgba(0,0,0,.5);
+  --radius: 8px;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:#f4f6fd; --surface:#fff; --surface2:#edf0fb; --surface3:#e4e9f5;
+    --border:#d0d8f0; --text:#0f1729; --text-dim:#3d4f7a; --muted:#7b8ab2;
+    --purple:#5b3ee8; --purple-lt:rgba(91,62,232,.08);
+    --cyan:#0891b2; --cyan-lt:rgba(8,145,178,.08);
+    --green:#059669; --green-lt:rgba(5,150,105,.08);
+    --amber:#d97706; --amber-lt:rgba(217,119,6,.08);
+    --red:#dc2626; --red-lt:rgba(220,38,38,.08);
+    --blue:#2563eb; --blue-lt:rgba(37,99,235,.08);
+    --a-color:#5b3ee8; --b-color:#0891b2;
+    --a-lt:rgba(91,62,232,.08); --b-lt:rgba(8,145,178,.08);
+    --shadow:0 4px 24px rgba(0,0,0,.08);
+  }
+}
+:root[data-theme="light"] {
+  --bg:#f4f6fd; --surface:#fff; --surface2:#edf0fb; --surface3:#e4e9f5;
+  --border:#d0d8f0; --text:#0f1729; --text-dim:#3d4f7a; --muted:#7b8ab2;
+  --purple:#5b3ee8; --purple-lt:rgba(91,62,232,.08);
+  --cyan:#0891b2; --cyan-lt:rgba(8,145,178,.08);
+  --green:#059669; --green-lt:rgba(5,150,105,.08);
+  --amber:#d97706; --amber-lt:rgba(217,119,6,.08);
+  --red:#dc2626; --red-lt:rgba(220,38,38,.08);
+  --blue:#2563eb; --blue-lt:rgba(37,99,235,.08);
+  --a-color:#5b3ee8; --b-color:#0891b2;
+  --a-lt:rgba(91,62,232,.08); --b-lt:rgba(8,145,178,.08);
+  --shadow:0 4px 24px rgba(0,0,0,.08);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  line-height: 1.7; min-height: 100vh;
+}
+
+/* ── Header ── */
+.site-header {
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  padding: 0 24px; position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 12px; height: 52px;
+}
+.logo { font-size: 12px; font-weight: 800; color: var(--text); letter-spacing: -.01em; }
+.logo span { color: var(--purple); }
+.header-sep { color: var(--muted); }
+.header-title { font-size: 13px; color: var(--text-dim); }
+.header-spacer { flex: 1; }
+.hbtn {
+  font-size: 12px; padding: 4px 10px; border-radius: 5px; border: 1px solid var(--border);
+  background: none; color: var(--text-dim); cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 4px; transition: color .15s, border-color .15s;
+}
+.hbtn:hover { color: var(--text); border-color: var(--text-dim); }
+
+/* ── Layout ── */
+.main { max-width: 1060px; margin: 0 auto; padding: 40px 22px 100px; }
+section { margin-bottom: 56px; }
+h2 {
+  font-size: 17px; font-weight: 800; color: var(--text);
+  margin-bottom: 20px; padding-left: 12px;
+  border-left: 3px solid var(--purple);
+}
+h3 { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+
+/* ── Hero ── */
+.hero { text-align: center; padding: 48px 0 40px; }
+.hero-eyebrow {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em;
+  color: var(--purple); margin-bottom: 14px;
+}
+.hero-title {
+  font-size: clamp(22px,3.5vw,38px); font-weight: 900; line-height: 1.1;
+  color: var(--text); text-wrap: balance; margin-bottom: 16px;
+}
+.hero-sub {
+  font-size: 15px; color: var(--text-dim); max-width: 640px; margin: 0 auto 28px; line-height: 1.7;
+}
+.approach-chips {
+  display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;
+}
+.chip {
+  padding: 7px 18px; border-radius: 99px; font-size: 13px; font-weight: 700;
+  border: 1.5px solid; display: inline-flex; align-items: center; gap: 6px;
+}
+.chip-a { background: var(--a-lt); border-color: var(--a-color); color: var(--a-color); }
+.chip-b { background: var(--b-lt); border-color: var(--b-color); color: var(--b-color); }
+
+/* ── Context callout ── */
+.context-box {
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--amber);
+  border-radius: var(--radius); padding: 16px 20px; margin-bottom: 40px;
+  font-size: 14px; color: var(--text-dim); line-height: 1.7;
+}
+.context-box strong { color: var(--text); }
+
+/* ── Side-by-side approach headers ── */
+.approach-header-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+.approach-header {
+  background: var(--surface); border: 1px solid var(--border); border-top: 3px solid;
+  border-radius: var(--radius); padding: 18px 20px;
+}
+.approach-header.a { border-top-color: var(--a-color); }
+.approach-header.b { border-top-color: var(--b-color); }
+.ah-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+.ah-label.a { color: var(--a-color); }
+.ah-label.b { color: var(--b-color); }
+.ah-title { font-size: 15px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+.ah-sub { font-size: 12.5px; color: var(--text-dim); }
+
+/* ── Diagrams ── */
+.diagram-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+@media (max-width: 680px) { .diagram-grid { grid-template-columns: 1fr; } }
+.diagram-wrap {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; overflow-x: auto; box-shadow: var(--shadow);
+}
+.diagram-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+  margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+}
+.diagram-label.a { color: var(--a-color); }
+.diagram-label.b { color: var(--b-color); }
+.diagram-caption { font-size: 11.5px; color: var(--muted); margin-top: 10px; text-align: center; line-height: 1.5; }
+
+/* ── Request-path comparison ── */
+.path-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 680px) { .path-grid { grid-template-columns: 1fr; } }
+
+.path-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.path-header {
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+  background: var(--surface2);
+}
+.path-header.a { color: var(--a-color); }
+.path-header.b { color: var(--b-color); }
+.path-steps { padding: 14px; }
+.path-step {
+  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; font-size: 13px;
+}
+.path-step:last-child { margin-bottom: 0; }
+.ps-num {
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; margin-top: 1px;
+}
+.ps-num.a { background: var(--a-lt); color: var(--a-color); }
+.ps-num.b { background: var(--b-lt); color: var(--b-color); }
+.ps-text { color: var(--text-dim); line-height: 1.5; }
+.ps-text strong { color: var(--text); }
+.ps-note { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── Trade-off table ── */
+.tradeoff-wrap { overflow-x: auto; }
+.tradeoff-table {
+  width: 100%; border-collapse: collapse; font-size: 13.5px;
+  background: var(--surface); border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.tradeoff-table th {
+  padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .07em; border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+.tradeoff-table th.a { color: var(--a-color); }
+.tradeoff-table th.b { color: var(--b-color); }
+.tradeoff-table th:first-child { color: var(--muted); }
+.tradeoff-table td {
+  padding: 11px 16px; border-bottom: 1px solid var(--border);
+  vertical-align: top; line-height: 1.55;
+}
+.tradeoff-table tr:last-child td { border-bottom: none; }
+.tradeoff-table td:first-child {
+  font-weight: 700; color: var(--text); font-size: 12.5px;
+  white-space: nowrap; background: var(--surface2);
+}
+.tradeoff-table td.a { color: var(--text-dim); }
+.tradeoff-table td.b { color: var(--text-dim); }
+.win  { color: var(--green); font-weight: 700; }
+.lose { color: var(--red); font-weight: 700; }
+.tie  { color: var(--amber); }
+
+/* ── When to use ── */
+.when-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 680px) { .when-grid { grid-template-columns: 1fr; } }
+.when-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px;
+}
+.when-card.a { border-top: 3px solid var(--a-color); }
+.when-card.b { border-top: 3px solid var(--b-color); }
+.when-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 10px; }
+.when-label.a { color: var(--a-color); }
+.when-label.b { color: var(--b-color); }
+.when-item { display: flex; gap: 8px; font-size: 13px; color: var(--text-dim); margin-bottom: 7px; align-items: flex-start; }
+.when-item .ic { flex-shrink: 0; margin-top: 2px; font-size: 12px; }
+
+/* ── Code comparison ── */
+.code-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 680px) { .code-grid { grid-template-columns: 1fr; } }
+.code-block-wrap {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+}
+.code-label {
+  padding: 8px 14px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+  border-bottom: 1px solid var(--border); background: var(--surface2);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.code-label.a { color: var(--a-color); }
+.code-label.b { color: var(--b-color); }
+.code-lang { font-weight: 500; color: var(--muted); text-transform: none; letter-spacing: 0; }
+pre.code {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.7; padding: 14px 16px;
+  overflow-x: auto; color: var(--text-dim); white-space: pre;
+}
+.ck { color: #79c0ff; }
+.cs { color: #a5d6a7; }
+.cn { color: #ffa657; }
+.cm { color: var(--muted); font-style: italic; }
+.ct { color: var(--cyan); }
+.cp { color: var(--purple); }
+
+/* ── Callout ── */
+.callout {
+  border-radius: var(--radius); padding: 13px 16px; display: flex; gap: 10px;
+  align-items: flex-start; font-size: 13px; line-height: 1.65; margin-bottom: 20px;
+}
+.callout-purple { background: var(--purple-lt); border-left: 3px solid var(--purple); }
+.callout-green  { background: var(--green-lt);  border-left: 3px solid var(--green); }
+.callout-amber  { background: var(--amber-lt);  border-left: 3px solid var(--amber); }
+.callout .ic { flex-shrink: 0; margin-top: 1px; }
+.callout strong { color: var(--text); }
+.callout p { color: var(--text-dim); margin: 0; }
+
+/* ── Verdict ── */
+.verdict-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px 28px;
+}
+.verdict-title { font-size: 15px; font-weight: 800; color: var(--text); margin-bottom: 12px; }
+.verdict-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 600px) { .verdict-grid { grid-template-columns: 1fr; } }
+.verdict-item { font-size: 13px; color: var(--text-dim); }
+.verdict-item strong { color: var(--text); display: block; font-size: 14px; margin-bottom: 4px; }
+
+/* ── Footer ── */
+footer {
+  border-top: 1px solid var(--border); text-align: center;
+  padding: 24px; font-size: 12px; color: var(--muted);
+}
+footer a { color: var(--purple); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="logo">vault<span>·</span>secrets<span>·</span>broker</div>
+  <span class="header-sep">/</span>
+  <div class="header-title">Approach Comparison</div>
+  <div class="header-spacer"></div>
+  <a class="hbtn" href="index.html">← Architecture Overview</a>
+  <a class="hbtn" href="flow.html">Rotation Simulator →</a>
+  <button class="hbtn" onclick="toggleTheme()">◑ Theme</button>
+</header>
+
+<main class="main">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-eyebrow">HashiCorp Vault · Plugin Architecture · Trade-off Analysis</div>
+    <h1 class="hero-title">Two Paths to Credential Rotation</h1>
+    <p class="hero-sub">
+      Vault's plugin SDK supports multiple approaches to extending its secrets engine surface.
+      For platforms without a native engine, we built and compared two architectures —
+      not to declare a winner, but to make the trade-offs visible so teams can choose deliberately.
+    </p>
+    <div class="approach-chips">
+      <span class="chip chip-a">A — Native Plugin</span>
+      <span class="chip chip-b">B — Generic REST Engine</span>
+    </div>
+  </div>
+
+  <!-- Context -->
+  <div class="context-box">
+    <strong>Why this comparison exists.</strong>
+    Vault ships native secrets engines for AWS IAM, Azure AD, GCP, PostgreSQL, MySQL, MongoDB, PKI, SSH, and more.
+    For any platform that doesn't have one, teams have two architectural choices: write a native plugin per platform,
+    or deploy a single generic REST secrets engine that delegates to a provider-agnostic rotation service.
+    Both are valid. This page makes the trade-offs concrete with a real example:
+    the Auth0 platform, where we built both approaches side by side.
+  </div>
+
+  <!-- Approach headers -->
+  <section>
+    <div class="approach-header-grid">
+      <div class="approach-header a">
+        <div class="ah-label a">Approach A</div>
+        <div class="ah-title">vault-auth0-engine</div>
+        <div class="ah-sub">A native Vault secrets plugin that calls the Auth0 Management API directly. One plugin per platform. Each plugin owns its full rotation logic.</div>
+      </div>
+      <div class="approach-header b">
+        <div class="ah-label b">Approach B</div>
+        <div class="ah-title">vault-rest-engine + cred-rotation-api</div>
+        <div class="ah-sub">A generic REST secrets plugin that delegates to a platform-agnostic rotation service. All platforms share one plugin; each gets a thin adapter.</div>
+      </div>
+    </div>
+
+    <!-- Architecture diagrams -->
+    <div class="diagram-grid">
+      <div class="diagram-wrap">
+        <div class="diagram-label a">A — Native Plugin Architecture</div>
+<pre class="mermaid">flowchart TB
+    app["Consumer App"]
+    subgraph vault["HashiCorp Vault"]
+        engine_a0["vault-auth0-engine\n(Auth0 plugin)"]
+        engine_sq["vault-sq-engine\n(SonarQube plugin)"]
+        engine_dd["vault-dd-engine\n(Datadog plugin)"]
+        transit["Transit Engine"]
+    end
+    auth0["Auth0 Mgmt API"]
+    sonar["SonarQube Web API"]
+    datadog["Datadog API"]
+
+    app -- "TLS" --> engine_a0
+    app -- "TLS" --> engine_sq
+    app -- "TLS" --> engine_dd
+    engine_a0 -- "TLS 1.3" --> auth0
+    engine_sq -- "TLS 1.3" --> sonar
+    engine_dd -- "TLS 1.3" --> datadog
+    engine_a0 & engine_sq & engine_dd -- "Transit\nencrypt/decrypt" --> transit</pre>
+        <div class="diagram-caption">One plugin binary per platform. Adding a new platform = writing and registering a new Vault plugin.</div>
+      </div>
+
+      <div class="diagram-wrap">
+        <div class="diagram-label b">B — Generic REST Engine Architecture</div>
+<pre class="mermaid">flowchart TB
+    app["Consumer App"]
+    subgraph vault["HashiCorp Vault"]
+        engine["vault-rest-engine\n(one plugin, all platforms)"]
+        transit["Transit Engine"]
+        pki["PKI Engine\nInternal CA"]
+    end
+    subgraph broker["cred-rotation-api · mTLS"]
+        a0["Auth0\nAdapter"]
+        sq["SonarQube\nAdapter"]
+        dd["Datadog\nAdapter"]
+    end
+    auth0["Auth0 Mgmt API"]
+    sonar["SonarQube Web API"]
+    datadog["Datadog API"]
+
+    app -- "TLS" --> engine
+    engine -- "mTLS\nclient cert" --> broker
+    a0 -- "TLS 1.3" --> auth0
+    sq -- "TLS 1.3" --> sonar
+    dd -- "TLS 1.3" --> datadog
+    engine & broker -- "Transit\nencrypt/decrypt" --> transit
+    pki -- "issues cert\nfor plugin" --> engine</pre>
+        <div class="diagram-caption">One plugin binary for all platforms. Adding a new platform = writing a new adapter in the rotation service.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Request path comparison -->
+  <section>
+    <h2>Request Path — Step by Step</h2>
+    <div class="path-grid">
+      <div class="path-card">
+        <div class="path-header a">A — vault-auth0-engine  (4 hops)</div>
+        <div class="path-steps">
+          <div class="path-step">
+            <div class="ps-num a">1</div>
+            <div>
+              <div class="ps-text"><strong>Consumer → Vault (TLS)</strong></div>
+              <div class="ps-note">vault read auth0/creds/my-role</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num a">2</div>
+            <div>
+              <div class="ps-text"><strong>Plugin → Auth0 Management API (TLS 1.3)</strong></div>
+              <div class="ps-note">POST /api/v2/clients/{id}/rotate-secret — direct API call</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num a">3</div>
+            <div>
+              <div class="ps-text"><strong>Plugin → Transit (encrypt new secret)</strong></div>
+              <div class="ps-note">Plaintext → vault:v1: ciphertext</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num a">4</div>
+            <div>
+              <div class="ps-text"><strong>Plugin → Transit (decrypt on read)</strong></div>
+              <div class="ps-note">vault:v1: ciphertext → plaintext in memory → consumer</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="path-card">
+        <div class="path-header b">B — vault-rest-engine + cred-rotation-api  (6 hops)</div>
+        <div class="path-steps">
+          <div class="path-step">
+            <div class="ps-num b">1</div>
+            <div>
+              <div class="ps-text"><strong>Consumer → Vault (TLS)</strong></div>
+              <div class="ps-note">vault read generic/creds/my-role</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num b">2</div>
+            <div>
+              <div class="ps-text"><strong>Plugin → cred-rotation-api (mTLS)</strong></div>
+              <div class="ps-note">POST /v1/credentials/rotate — PKI client cert validates both sides</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num b">3</div>
+            <div>
+              <div class="ps-text"><strong>Adapter → Auth0 Management API (TLS 1.3)</strong></div>
+              <div class="ps-note">POST /api/v2/clients/{id}/rotate-secret</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num b">4</div>
+            <div>
+              <div class="ps-text"><strong>Adapter → Transit (encrypt new secret)</strong></div>
+              <div class="ps-note">Plaintext → vault:v1: ciphertext — before it leaves the API</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num b">5</div>
+            <div>
+              <div class="ps-text"><strong>API → Plugin (mTLS, ciphertext only)</strong></div>
+              <div class="ps-note">Plugin never receives plaintext credential</div>
+            </div>
+          </div>
+          <div class="path-step">
+            <div class="ps-num b">6</div>
+            <div>
+              <div class="ps-text"><strong>Plugin → Transit (decrypt on read)</strong></div>
+              <div class="ps-note">vault:v1: ciphertext → plaintext in plugin memory → consumer</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Code comparison -->
+  <section>
+    <h2>What You Actually Write</h2>
+    <p style="font-size:14px;color:var(--text-dim);margin-bottom:18px">
+      To add a new platform (SonarQube in this example), here is what changes under each approach:
+    </p>
+    <div class="code-grid">
+      <div class="code-block-wrap">
+        <div class="code-label a">
+          Approach A — New Vault Plugin <span class="code-lang">Go</span>
+        </div>
+<pre class="code"><span class="cm">// Must write an entire new Vault plugin</span>
+<span class="ck">package</span> <span class="ct">sonarqubeplugin</span>
+
+<span class="cm">// ─ New plugin binary to register with Vault</span>
+<span class="ck">func</span> <span class="cn">Factory</span>(ctx context.Context,
+    conf *backend.BackendConfig) (logical.Backend, error) {
+    b := &amp;backend{}
+    b.Backend = &amp;framework.Backend{
+        Paths:       b.paths(),
+        BackendType: logical.TypeLogical,
+    }
+    <span class="ck">return</span> b, b.Setup(ctx, conf)
+}
+
+<span class="cm">// ─ Implement config, roles, creds paths</span>
+<span class="ck">func</span> (b *backend) <span class="cn">paths</span>() []*framework.Path {
+    <span class="ck">return</span> []*framework.Path{
+        b.pathConfig(),
+        b.pathRoles(),
+        b.pathCredsRead(), <span class="cm">// rotation logic here</span>
+    }
+}
+
+<span class="cm">// ─ Write rotation logic (SonarQube-specific)</span>
+<span class="cm">// ─ Write revocation logic</span>
+<span class="cm">// ─ Register SHA256-pinned binary with Vault</span>
+<span class="cm">// ─ Write tests, handle Vault SDK lifecycle</span></pre>
+      </div>
+
+      <div class="code-block-wrap">
+        <div class="code-label b">
+          Approach B — New Adapter Only <span class="code-lang">Go</span>
+        </div>
+<pre class="code"><span class="cm">// Only write a new adapter — plugin unchanged</span>
+<span class="ck">package</span> <span class="ct">sonarqube</span>
+
+<span class="cm">// ─ Implement the Adapter interface (3 methods)</span>
+<span class="ck">type</span> <span class="cn">Adapter</span> <span class="ck">struct</span> {
+    baseURL    string
+    adminToken string
+    httpClient *http.Client
+}
+
+<span class="ck">func</span> (a *Adapter) <span class="cn">Rotate</span>(
+    ctx context.Context,
+    req adapter.RotateRequest,
+) (adapter.Result, error) {
+    <span class="cm">// call SonarQube API, return encrypted result</span>
+}
+
+<span class="ck">func</span> (a *Adapter) <span class="cn">Revoke</span>(
+    ctx context.Context,
+    req adapter.RevokeRequest,
+) error { <span class="cm">/* revoke token */</span> }
+
+<span class="ck">func</span> (a *Adapter) <span class="cn">Status</span>(
+    ctx context.Context,
+    credentialID string,
+) (adapter.CredentialStatus, error) { <span class="cm">/* check */</span> }
+
+<span class="ck">func</span> (a *Adapter) <span class="cn">Name</span>() string { <span class="ck">return</span> <span class="cs">"sonarqube"</span> }
+
+<span class="cm">// ─ Register in main.go: reg.Register(sonarqube.New(cfg))</span>
+<span class="cm">// ─ No Vault plugin changes. No binary re-registration.</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Trade-off table -->
+  <section>
+    <h2>Trade-off Matrix</h2>
+    <div class="tradeoff-wrap">
+      <table class="tradeoff-table">
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th class="a">A — Native Plugin</th>
+            <th class="b">B — Generic REST Engine</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Hop count (read path)</td>
+            <td class="a"><span class="win">4 hops</span> — faster, fewer network roundtrips</td>
+            <td class="b"><span class="lose">6 hops</span> — 2 extra (plugin → API → plugin)</td>
+          </tr>
+          <tr>
+            <td>Adding a new platform</td>
+            <td class="a"><span class="lose">New Vault plugin binary</span> — write, test, register SHA256 pin, restart Vault (or hot-reload)</td>
+            <td class="b"><span class="win">New adapter (~200 lines)</span> — no plugin changes, no Vault restart, no binary re-registration</td>
+          </tr>
+          <tr>
+            <td>Vault plugin count</td>
+            <td class="a"><span class="lose">1 plugin per platform</span> — grows with the number of providers</td>
+            <td class="b"><span class="win">1 plugin for all platforms</span> — single binary to maintain and register</td>
+          </tr>
+          <tr>
+            <td>Vault plugin upgrade cycle</td>
+            <td class="a"><span class="lose">Restart or hot-reload Vault</span> per plugin for every update</td>
+            <td class="b"><span class="win">Restart only cred-rotation-api</span> — Vault itself untouched for adapter changes</td>
+          </tr>
+          <tr>
+            <td>Plaintext exposure surface</td>
+            <td class="a"><span class="tie">Plaintext in plugin memory</span> — standard Vault pattern, well-understood</td>
+            <td class="b"><span class="win">Plaintext in API memory only</span> — plugin only ever sees vault:v1: ciphertext; stronger isolation</td>
+          </tr>
+          <tr>
+            <td>mTLS between components</td>
+            <td class="a"><span class="win">No extra mTLS layer</span> — fewer TLS connections</td>
+            <td class="b"><span class="tie">mTLS between plugin and API</span> — extra TLS handshake; provides mutual authentication</td>
+          </tr>
+          <tr>
+            <td>Independent scaling</td>
+            <td class="a"><span class="lose">Plugin runs inside Vault process</span> — cannot scale independently</td>
+            <td class="b"><span class="win">cred-rotation-api scales independently</span> — Kubernetes HPA, separate resource limits</td>
+          </tr>
+          <tr>
+            <td>Independent deployment</td>
+            <td class="a"><span class="lose">Plugin tied to Vault lifecycle</span> — deploy Vault to update a provider</td>
+            <td class="b"><span class="win">Deploy adapter changes separately</span> — zero downtime for Vault consumers</td>
+          </tr>
+          <tr>
+            <td>Language / framework freedom</td>
+            <td class="a"><span class="lose">Must use Vault Plugin SDK (Go)</span> — all platforms share the same tech stack</td>
+            <td class="b"><span class="win">cred-rotation-api language-agnostic</span> — adapters could move to other languages behind the interface</td>
+          </tr>
+          <tr>
+            <td>Operational complexity</td>
+            <td class="a"><span class="win">Simpler overall</span> — one fewer service to run, monitor, and secure</td>
+            <td class="b"><span class="lose">One extra service</span> — cred-rotation-api needs its own TLS certs, health checks, observability</td>
+          </tr>
+          <tr>
+            <td>Auth isolation (SPIFFE)</td>
+            <td class="a"><span class="lose">Plugin inherits Vault's identity</span> — harder to attest separately</td>
+            <td class="b"><span class="win">API gets its own SPIFFE SVID</span> — workload identity is independently attested by SPIRE</td>
+          </tr>
+          <tr>
+            <td>Best fit</td>
+            <td class="a">1–3 platforms, stable provider set, performance-critical paths</td>
+            <td class="b">4+ platforms, frequent provider additions, distributed teams, regulated environments requiring isolation</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Security note -->
+  <section>
+    <h2>Security Difference: Plaintext Isolation</h2>
+    <div class="callout callout-purple" style="margin-bottom:14px">
+      <span class="ic">🔑</span>
+      <div>
+        <strong>Approach A:</strong>
+        <p>The native plugin receives the plaintext credential from the SaaS API response and holds it in the Vault plugin process memory. This is the standard Vault dynamic secrets pattern — Vault core manages the credential lifecycle. Security perimeter: Vault process.</p>
+      </div>
+    </div>
+    <div class="callout callout-green">
+      <span class="ic">🔐</span>
+      <div>
+        <strong>Approach B — stronger isolation:</strong>
+        <p>The plaintext credential never reaches the Vault plugin. The rotation API encrypts it with Transit immediately after the SaaS provider responds, and only the <code style="font-family:var(--mono);font-size:11px">vault:v1:</code> ciphertext travels over mTLS back to the plugin. Even a compromised mTLS key yields only ciphertext, not the credential. Security perimeter: cred-rotation-api process only.</p>
+      </div>
+    </div>
+    <p style="font-size:13.5px;color:var(--text-dim);margin-top:14px;line-height:1.7">
+      Both approaches use Transit envelope encryption (AES-256-GCM96) and TLS 1.3 on all outbound connections.
+      The difference is <em>where</em> the plaintext window exists: in the Vault plugin process (Approach A)
+      or exclusively in the rotation API process (Approach B).
+      In regulated environments where the Vault process boundary is the audit boundary,
+      Approach B's extra isolation layer has real compliance value.
+    </p>
+  </section>
+
+  <!-- When to use -->
+  <section>
+    <h2>Which Approach to Choose</h2>
+    <div class="when-grid">
+      <div class="when-card a">
+        <div class="when-label a">Choose Approach A (Native Plugin) when…</div>
+        <div class="when-item"><span class="ic">✅</span> You have 1–3 platforms and the set is stable</div>
+        <div class="when-item"><span class="ic">✅</span> Performance is the primary constraint (fewer hops)</div>
+        <div class="when-item"><span class="ic">✅</span> Your team has strong Vault SDK / Go expertise</div>
+        <div class="when-item"><span class="ic">✅</span> You want fewer moving parts and simpler operations</div>
+        <div class="when-item"><span class="ic">✅</span> Vault's native plugin isolation is sufficient for your compliance boundary</div>
+        <div class="when-item"><span class="ic">✅</span> The target platform's API is well-understood and unlikely to change shape</div>
+      </div>
+      <div class="when-card b">
+        <div class="when-label b">Choose Approach B (Generic REST Engine) when…</div>
+        <div class="when-item"><span class="ic">✅</span> You have 4+ platforms or expect to add more over time</div>
+        <div class="when-item"><span class="ic">✅</span> Different teams own different platform adapters</div>
+        <div class="when-item"><span class="ic">✅</span> You need zero-downtime adapter deployments without Vault restarts</div>
+        <div class="when-item"><span class="ic">✅</span> Regulated environments require explicit process-level isolation for plaintext credentials</div>
+        <div class="when-item"><span class="ic">✅</span> You want SPIFFE workload identity for the rotation service independently of Vault</div>
+        <div class="when-item"><span class="ic">✅</span> The rotation service needs to scale, have its own SLOs, or be owned by a security team</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Verdict -->
+  <section>
+    <h2>The Verdict</h2>
+    <div class="verdict-box">
+      <div class="verdict-title">No universal winner — context decides.</div>
+      <div style="font-size:14px;color:var(--text-dim);margin-bottom:20px;line-height:1.7">
+        Approach A is simpler and faster for small, stable platform sets. Approach B trades operational
+        simplicity for organizational flexibility and stronger credential isolation.
+        The right answer depends on how many platforms you need to support, who owns them,
+        and what your compliance requirements are.
+        This project implements both so teams can evaluate the pattern against their own constraints —
+        not because one is objectively better.
+      </div>
+      <div class="verdict-grid">
+        <div class="verdict-item">
+          <strong>Both share the same security foundation</strong>
+          Transit AES-256-GCM96, TLS 1.3 on all outbound calls, Vault audit log for every credential lifecycle event, fail-closed revocation.
+        </div>
+        <div class="verdict-item">
+          <strong>The key differentiator is the plaintext boundary</strong>
+          Approach A: Vault plugin process. Approach B: cred-rotation-api process. Neither is inherently wrong — the choice depends on your audit and compliance model.
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    <a href="index.html">Architecture Overview</a> &nbsp;·&nbsp;
+    <a href="flow.html">Rotation Simulator</a> &nbsp;·&nbsp;
+    <a href="https://github.com/jralmaraz/vault-secrets-broker">GitHub</a> &nbsp;·&nbsp;
+    vault·secrets·broker
+  </p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  (function () {
+    var forcedTheme = document.documentElement.dataset.theme;
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var isDark = forcedTheme === 'dark' || (!forcedTheme && prefersDark);
+    mermaid.initialize({ startOnLoad: true, theme: isDark ? 'dark' : 'default' });
+  })();
+
+  function toggleTheme() {
+    var root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : root.dataset.theme === 'light' ? '' : 'dark';
+    if (!root.dataset.theme) delete root.dataset.theme;
+  }
+</script>
+</body>
+</html>
