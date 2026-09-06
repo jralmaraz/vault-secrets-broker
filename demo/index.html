@@ -239,28 +239,31 @@ footer a { color: var(--purple); text-decoration: none; }
 <header class="site-header">
   <div class="logo">vault<span>·</span>secrets<span>·</span>broker</div>
   <div class="header-badges">
-    <span class="badge badge-purple">Go 1.26</span>
-    <span class="badge badge-cyan">Vault 2.1+</span>
+    <span class="badge badge-purple">Go 1.27</span>
+    <span class="badge badge-cyan">Vault 1.18+</span>
     <span class="badge badge-green">Transit AES-256-GCM96</span>
-    <span class="badge badge-amber">PoC</span>
+    <span class="badge badge-green">6 Adapters</span>
+    <span class="badge badge-purple">SPIFFE / SPIRE</span>
   </div>
 </header>
 
 <!-- ── Hero ── -->
 <section class="hero">
-  <div class="hero-eyebrow">HashiCorp Vault · Custom Plugin Architecture</div>
+  <div class="hero-eyebrow">HashiCorp Vault · Custom Plugin Architecture · SPIFFE / SPIRE</div>
   <h1 class="hero-title">
     Genuine Credential Rotation<br>
     <span class="hl">Not Just Storage</span>
   </h1>
   <p class="hero-sub">
-    A proof of concept demonstrating that Vault can rotate API credentials for SaaS providers
-    in real-time — calling their APIs, revoking old credentials on expiry, and protecting
-    credential values in transit with Transit envelope encryption and mTLS.
+    A production-grade accelerator that enables Vault to rotate API credentials for SaaS providers
+    in real time — calling their APIs, revoking old credentials on expiry, and protecting
+    credential values with Transit envelope encryption, mTLS, and SPIFFE workload identity.
+    Six adapters. Zero static secrets.
   </p>
   <div class="hero-cta">
-    <a class="btn btn-primary" href="https://github.com/jralmaraz/vault-secrets-broker">View on GitHub</a>
-    <a class="btn btn-outline" href="https://github.com/jralmaraz/vault-secrets-broker/blob/main/README.md">Full Documentation</a>
+    <a class="btn btn-primary" href="flow.html">Live Rotation Simulator →</a>
+    <a class="btn btn-outline" href="https://github.com/jralmaraz/vault-secrets-broker">View on GitHub</a>
+    <a class="btn btn-outline" href="https://github.com/jralmaraz/vault-secrets-broker/blob/main/README.md">Documentation</a>
   </div>
 </section>
 
@@ -287,7 +290,7 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="compare-item"><span class="ic">❌</span> Leaked credential remains usable indefinitely</div>
       </div>
       <div class="compare-card good">
-        <div class="compare-label">Dynamic Secrets Engine (this PoC) ✓</div>
+        <div class="compare-label">Dynamic Secrets Engine (this accelerator) ✓</div>
         <div class="compare-item"><span class="ic">✅</span> Calls the target API to create a new credential</div>
         <div class="compare-item"><span class="ic">✅</span> Returns short-lived dynamic credential with TTL</div>
         <div class="compare-item"><span class="ic">✅</span> On lease expiry: calls API to revoke the credential</div>
@@ -309,12 +312,18 @@ footer a { color: var(--purple); text-decoration: none; }
         app2["App B\nvault read auth0/creds/my-role"]
     end
 
-    subgraph vault["HashiCorp Vault 2.1+ · TLS :8200"]
+    subgraph spire["SPIFFE / SPIRE Identity Plane"]
+        spire_server["SPIRE Server\nOIDC provider · JWT-SVID CA"]
+        spire_agent["SPIRE Agent\nworkload attestation API"]
+    end
+
+    subgraph vault["HashiCorp Vault 1.18+ · TLS :8200"]
         engine1["vault-rest-engine\n(Generic REST Plugin)"]
         engine3["vault-auth0-engine\n(Auth0 Native Plugin)"]
         transit["Transit Engine\ncred-rotation-key\naes256-gcm96"]
         pki["PKI Engine\nInternal CA"]
         kv["KV v2\nTransit-encrypted\nadapter config"]
+        jwt_auth["JWT Auth Method\nSPIFFE trust domain"]
     end
 
     subgraph broker["Credential Rotation API · mTLS :8443"]
@@ -322,25 +331,37 @@ footer a { color: var(--purple); text-decoration: none; }
         a0["Auth0\nAdapter"]
         sp["Splunk\nAdapter"]
         sq["SonarQube\nAdapter"]
+        gh["GitHub\nAdapter"]
+        dd["Datadog\nAdapter"]
+        pd["PagerDuty\nAdapter"]
     end
 
-    subgraph saas["SaaS Providers · TLS"]
+    subgraph saas["SaaS Providers · TLS 1.3"]
         auth0["Auth0\nMgmt API"]
         splunk["Splunk\nREST API"]
         sonar["SonarQube\nWeb API"]
+        github["GitHub\nTokens API"]
+        datadog["Datadog\nAPI Keys API"]
+        pagerduty["PagerDuty\nREST API v2"]
     end
 
-    app1 -- "TLS" --> engine1
-    app2 -- "TLS" --> engine3
-    engine1 -- "mTLS\nclient cert from PKI" --> a0
-    engine3 -- "TLS" --> auth0
-    a0 -- "TLS" --> auth0
-    sp -- "TLS" --> splunk
-    sq -- "TLS" --> sonar
+    app1 -- "TLS 1.3" --> engine1
+    app2 -- "TLS 1.3" --> engine3
+    engine1 -- "mTLS\nPKI client cert" --> a0
+    engine3 -- "TLS 1.3" --> auth0
+    a0 -- "TLS 1.3" --> auth0
+    sp -- "TLS 1.3" --> splunk
+    sq -- "TLS 1.3" --> sonar
+    gh -- "TLS 1.3" --> github
+    dd -- "TLS 1.3" --> datadog
+    pd -- "TLS 1.3" --> pagerduty
     engine1 & broker -- "Transit encrypt/decrypt\nenvelope encryption" --> transit
-    broker -- "Transit-decrypt\nadapter config" --> kv
-    pki -- "issues client cert\nfor vault-rest-engine" --> engine1</pre>
-      <div class="diagram-caption">Component 1 (vault-rest-engine) calls Component 2 (Credential Rotation API) over mTLS. Adding a new SaaS provider requires only a new adapter in Component 2 — zero plugin changes.</div>
+    broker -- "Transit-decrypt\nadapter config at boot" --> kv
+    pki -- "issues client cert\nfor vault-rest-engine" --> engine1
+    spire_agent -- "workload API\ngRPC unix socket" --> broker
+    spire_server -- "OIDC JWKS\nJWT-SVID validation" --> jwt_auth
+    broker -- "POST /v1/auth/jwt/login\nJWT-SVID credential" --> jwt_auth</pre>
+      <div class="diagram-caption">vault-rest-engine dispatches to Credential Rotation API over mTLS. Adding a provider requires only a new adapter — zero plugin changes. SPIFFE/SPIRE provides workload identity so cred-rotation-api authenticates to Vault with a short-lived JWT-SVID, not a static token.</div>
     </div>
   </section>
 
@@ -405,6 +426,13 @@ footer a { color: var(--purple); text-decoration: none; }
         <div>
           <strong>Layer 5 — Vault Storage Encryption</strong>
           <p>Vault's backend storage (Raft) is always encrypted with Vault's own seal key. This baseline applies even before Transit adds its layer.</p>
+        </div>
+      </div>
+      <div class="sec-layer">
+        <div class="sec-dot" style="background:var(--cyan)"></div>
+        <div>
+          <strong>Layer 6 — SPIFFE / SPIRE Workload Identity</strong>
+          <p>cred-rotation-api authenticates to Vault using a SPIFFE JWT-SVID — a short-lived (5 min), cryptographically-attested workload identity. No static Vault token, no AppRole secret stored on disk. SPIRE Agent attests the workload at startup via platform-level proofs (OS process, Kubernetes pod metadata, etc.) and issues SVIDs only to verified workloads.</p>
         </div>
       </div>
     </div>
@@ -498,7 +526,7 @@ footer a { color: var(--purple); text-decoration: none; }
         </div>
       </div>
       <div class="phase-item">
-        <div class="phase-num p-next">2</div>
+        <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 2 — Credential Rotation API</div>
           <div class="phase-desc">Go mTLS server with client certificate validation, Adapter interface, Auth0 adapter (POST /api/v2/clients/{id}/rotate-secret), Transit-encrypted config loading at startup.</div>
@@ -511,7 +539,7 @@ footer a { color: var(--purple); text-decoration: none; }
         </div>
       </div>
       <div class="phase-item">
-        <div class="phase-num p-planned">3</div>
+        <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 3 — Generic REST Secrets Engine</div>
           <div class="phase-desc">Custom Vault plugin (vault-rest-engine) using Vault Plugin SDK. config / roles / creds paths, mTLS call to Credential Rotation API, lease management with revocation callback, SHA256-pinned binary registration.</div>
@@ -523,10 +551,10 @@ footer a { color: var(--purple); text-decoration: none; }
         </div>
       </div>
       <div class="phase-item">
-        <div class="phase-num p-planned">4</div>
+        <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 4 — Auth0-native Secrets Engine</div>
-          <div class="phase-desc">vault-auth0-engine plugin: same SDK structure but calls Auth0 Management API directly (no intermediate API hop). Comparison with Phase 2+3 approach shows the trade-off between flexibility and efficiency.</div>
+          <div class="phase-desc">vault-auth0-engine plugin: same SDK structure but calls Auth0 Management API directly (no intermediate API hop). Demonstrates the trade-off between the generic REST engine and provider-specific plugins.</div>
           <div class="phase-tags">
             <span class="tag">vault-auth0-engine</span>
             <span class="tag">Auth0 Mgmt API direct</span>
@@ -535,26 +563,31 @@ footer a { color: var(--purple); text-decoration: none; }
         </div>
       </div>
       <div class="phase-item">
-        <div class="phase-num p-planned">5</div>
+        <div class="phase-num p-done">✓</div>
         <div>
-          <div class="phase-title">Phase 5 — Splunk + SonarQube Adapters</div>
-          <div class="phase-desc">Add two adapters to cred-rotation-api. Zero changes to Vault plugins. This is the key demonstration of the abstraction layer value: new SaaS providers with no plugin work.</div>
+          <div class="phase-title">Phase 5 — Multi-Provider Adapter Suite</div>
+          <div class="phase-desc">Six adapters shipped: Auth0, Splunk, SonarQube (Bearer token, SQ 10.0+), GitHub (fine-grained tokens), Datadog (API keys), PagerDuty (API keys). Zero changes to Vault plugins — the core demonstration of the abstraction layer value.</div>
           <div class="phase-tags">
-            <span class="tag">Splunk adapter</span>
-            <span class="tag">SonarQube adapter</span>
-            <span class="tag">zero plugin changes</span>
+            <span class="tag">Auth0</span>
+            <span class="tag">Splunk</span>
+            <span class="tag">SonarQube (Bearer)</span>
+            <span class="tag">GitHub</span>
+            <span class="tag">Datadog</span>
+            <span class="tag">PagerDuty</span>
           </div>
         </div>
       </div>
       <div class="phase-item">
-        <div class="phase-num p-planned">6</div>
+        <div class="phase-num p-next">▶</div>
         <div>
-          <div class="phase-title">Phase 6 — Hardening + Demo Narrative</div>
-          <div class="phase-desc">Circuit breaker, rotation failure handling (mid-flight revoke + new credential failure), audit log review, demo script showing the KV misconception in action and the full rotation lifecycle.</div>
+          <div class="phase-title">Phase 6 — SPIFFE / SPIRE + Hardening</div>
+          <div class="phase-desc">SPIRE integration test harness (Docker Compose, distroless Chainguard runtime, Vault OIDC JWT auth). cred-rotation-api authenticates to Vault via JWT-SVID — no static Vault tokens. Circuit breaker, rotation failure handling, audit log review, and this interactive demo.</div>
           <div class="phase-tags">
-            <span class="tag">circuit breaker</span>
-            <span class="tag">audit log</span>
-            <span class="tag">demo script</span>
+            <span class="tag">SPIFFE · SPIRE 1.11</span>
+            <span class="tag">JWT-SVID auth</span>
+            <span class="tag">Chainguard distroless</span>
+            <span class="tag">SPIRE integration tests</span>
+            <span class="tag">demo pages</span>
           </div>
         </div>
       </div>
@@ -568,7 +601,7 @@ footer a { color: var(--purple); text-decoration: none; }
       <span class="ic">⚠️</span>
       <div>
         <strong>Prerequisites:</strong>
-        <p>Go 1.26+, Vault 2.1+ (<code style="font-family:var(--mono);font-size:11px">brew install hashicorp/tap/vault</code>), an Auth0 dev tenant with a Management API M2M application.</p>
+        <p>Go 1.27+, Vault 1.18+ (<code style="font-family:var(--mono);font-size:11px">brew install hashicorp/tap/vault</code>), Docker (for SPIRE integration tests), an Auth0 dev tenant with a Management API M2M application.</p>
       </div>
     </div>
 <pre class="code-block"><span class="cm"># Clone and configure</span>
@@ -638,7 +671,8 @@ vault write -field=plaintext transit/decrypt/cred-rotation-key \
 <footer>
   <p>
     <a href="https://github.com/jralmaraz/vault-secrets-broker">github.com/jralmaraz/vault-secrets-broker</a>
-    &nbsp;·&nbsp; Vault 2.1+ &nbsp;·&nbsp; Go 1.26 &nbsp;·&nbsp; PoC — not production hardened
+    &nbsp;·&nbsp; Vault 1.18+ &nbsp;·&nbsp; Go 1.27 &nbsp;·&nbsp; Transit AES-256-GCM96 &nbsp;·&nbsp; SPIFFE / SPIRE
+    &nbsp;·&nbsp; <a href="flow.html">Interactive Rotation Simulator →</a>
   </p>
 </footer>
 

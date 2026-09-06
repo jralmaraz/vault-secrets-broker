@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rotation Flow Simulator</title>
+<style>
+/* ── Tokens ────────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #0c0f1a;
+  --surface:   #131826;
+  --surface2:  #1a2133;
+  --surface3:  #212942;
+  --border:    #2a3450;
+  --text:      #e2e8f8;
+  --text-dim:  #8fa3cc;
+  --muted:     #566080;
+
+  --purple:    #7c5cfc;
+  --purple-lt: rgba(124,92,252,.14);
+  --cyan:      #22d3ee;
+  --cyan-lt:   rgba(34,211,238,.1);
+  --green:     #34d399;
+  --green-lt:  rgba(52,211,153,.1);
+  --amber:     #fbbf24;
+  --amber-lt:  rgba(251,191,36,.1);
+  --red:       #f87171;
+  --red-lt:    rgba(248,113,113,.1);
+  --blue:      #60a5fa;
+  --blue-lt:   rgba(96,165,250,.1);
+
+  --c-auth:    #60a5fa;   /* auth tokens — blue */
+  --c-plain:   #f87171;   /* plaintext creds — red/danger */
+  --c-cipher:  #34d399;   /* Transit ciphertext — teal/safe */
+  --c-spiffe:  #c084fc;   /* SPIFFE JWT-SVID — lavender */
+  --c-internal:#64748b;   /* internal/plugin — slate */
+
+  --mono: "SF Mono","Cascadia Code","Fira Code",Menlo,monospace;
+  --shadow: 0 4px 24px rgba(0,0,0,.5);
+  --radius: 8px;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:#f4f6fd; --surface:#fff; --surface2:#edf0fb; --surface3:#e4e9f5;
+    --border:#d0d8f0; --text:#0f1729; --text-dim:#3d4f7a; --muted:#7b8ab2;
+    --purple:#5b3ee8; --purple-lt:rgba(91,62,232,.08);
+    --cyan:#0891b2; --cyan-lt:rgba(8,145,178,.08);
+    --green:#059669; --green-lt:rgba(5,150,105,.08);
+    --amber:#d97706; --amber-lt:rgba(217,119,6,.08);
+    --red:#dc2626; --red-lt:rgba(220,38,38,.08);
+    --blue:#2563eb; --blue-lt:rgba(37,99,235,.08);
+    --c-auth:#2563eb; --c-plain:#dc2626; --c-cipher:#059669;
+    --c-spiffe:#7c3aed; --c-internal:#475569;
+    --shadow:0 4px 24px rgba(0,0,0,.08);
+  }
+}
+:root[data-theme="light"] {
+  --bg:#f4f6fd; --surface:#fff; --surface2:#edf0fb; --surface3:#e4e9f5;
+  --border:#d0d8f0; --text:#0f1729; --text-dim:#3d4f7a; --muted:#7b8ab2;
+  --purple:#5b3ee8; --purple-lt:rgba(91,62,232,.08);
+  --cyan:#0891b2; --cyan-lt:rgba(8,145,178,.08);
+  --green:#059669; --green-lt:rgba(5,150,105,.08);
+  --amber:#d97706; --amber-lt:rgba(217,119,6,.08);
+  --red:#dc2626; --red-lt:rgba(220,38,38,.08);
+  --blue:#2563eb; --blue-lt:rgba(37,99,235,.08);
+  --c-auth:#2563eb; --c-plain:#dc2626; --c-cipher:#059669;
+  --c-spiffe:#7c3aed; --c-internal:#475569;
+  --shadow:0 4px 24px rgba(0,0,0,.08);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  line-height: 1.6; min-height: 100vh;
+}
+
+/* ── Header ── */
+.site-header {
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  padding: 0 24px; position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 12px; height: 52px;
+}
+.logo { font-size: 12px; font-weight: 800; color: var(--text); letter-spacing: -.01em; white-space: nowrap; }
+.logo span { color: var(--purple); }
+.header-sep { color: var(--muted); font-size: 16px; margin: 0 2px; }
+.header-title { font-size: 13px; color: var(--text-dim); }
+.header-spacer { flex: 1; }
+.header-actions { display: flex; gap: 8px; }
+.hbtn {
+  font-size: 12px; padding: 4px 10px; border-radius: 5px; border: 1px solid var(--border);
+  background: none; color: var(--text-dim); cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 4px; transition: color .15s, border-color .15s;
+}
+.hbtn:hover { color: var(--text); border-color: var(--text-dim); }
+
+/* ── Layout ── */
+.main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 80px; }
+
+/* ── Flow tabs ── */
+.tab-bar { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+.tab-btn {
+  padding: 10px 22px 11px; font-size: 14px; font-weight: 600; cursor: pointer;
+  background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  color: var(--text-dim); font-family: inherit; transition: color .15s, border-color .15s;
+  display: flex; align-items: center; gap: 7px;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--purple); border-bottom-color: var(--purple); }
+.tab-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .6; }
+
+/* ── Topology ── */
+.topo-wrap {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 16px 8px; margin-bottom: 16px; overflow-x: auto; box-shadow: var(--shadow);
+}
+#topo-svg { display: block; min-width: 600px; max-width: 100%; }
+
+/* ── Legend ── */
+.legend {
+  display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 20px;
+  padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: 11.5px;
+}
+.legend-item { display: flex; align-items: center; gap: 5px; color: var(--text-dim); }
+.ldot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.legend-div { width: 1px; height: 16px; background: var(--border); }
+
+/* ── Controls ── */
+.controls {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 22px;
+}
+.cbtn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  background: var(--surface2); color: var(--text); transition: background .15s, border-color .15s;
+}
+.cbtn:hover { background: var(--surface3); border-color: var(--text-dim); }
+.cbtn:disabled { opacity: .38; cursor: not-allowed; }
+.cbtn.primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+.cbtn.primary:hover { opacity: .88; }
+.cbtn.primary.playing { background: var(--surface2); border-color: var(--border); color: var(--text); }
+.speed-ctrl { display: flex; align-items: center; gap: 7px; margin-left: auto; font-size: 12px; color: var(--text-dim); }
+.speed-ctrl input[type=range] { width: 88px; accent-color: var(--purple); }
+.step-counter { font-family: var(--mono); font-size: 12px; color: var(--text-dim); white-space: nowrap; padding: 0 4px; }
+
+/* ── Encrypt/Decrypt event banner ── */
+.event-banner {
+  padding: 10px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+  transition: opacity .3s; opacity: 0; height: 0; overflow: hidden;
+}
+.event-banner.visible { opacity: 1; height: auto; margin-bottom: 16px; }
+.event-banner.encrypt { background: var(--green-lt); border-left: 3px solid var(--green); color: var(--green); }
+.event-banner.decrypt { background: var(--red-lt); border-left: 3px solid var(--red); color: var(--red); }
+.event-banner.spiffe  { background: rgba(192,132,252,.1); border-left: 3px solid var(--c-spiffe); color: var(--c-spiffe); }
+
+/* ── Two-column layout ── */
+.flow-grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: 20px; align-items: start; }
+@media (max-width: 720px) { .flow-grid { grid-template-columns: 1fr; } }
+
+/* ── Step list ── */
+.steps-col {}
+.steps-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+.steps-list { display: flex; flex-direction: column; gap: 4px; }
+
+.step-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--border); border-radius: var(--radius);
+  padding: 10px 13px; cursor: pointer;
+  transition: background .15s, border-color .2s;
+  opacity: .45;
+}
+.step-card.revealed { opacity: 1; animation: fadein .25s ease-out; }
+.step-card.active { background: var(--surface2); opacity: 1; }
+.step-card.past { opacity: .6; }
+@keyframes fadein { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+.sc-head { display: flex; align-items: center; gap: 8px; }
+.sc-num { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 18px; }
+.sc-badge {
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+  padding: 1px 5px; border-radius: 3px;
+}
+.sc-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.sc-route { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 3px 0 0 26px; }
+.sc-security { font-size: 11.5px; color: var(--text-dim); margin: 5px 0 0 26px; line-height: 1.5; display: none; }
+.step-card.active .sc-security { display: block; }
+
+/* type-specific border + badge colors */
+.step-card.t-auth    { border-left-color: var(--c-auth); }
+.step-card.t-plain   { border-left-color: var(--c-plain); }
+.step-card.t-cipher  { border-left-color: var(--c-cipher); }
+.step-card.t-spiffe  { border-left-color: var(--c-spiffe); }
+.step-card.t-internal{ border-left-color: var(--c-internal); }
+
+.sc-badge.t-auth    { background: var(--blue-lt);                    color: var(--c-auth); }
+.sc-badge.t-plain   { background: var(--red-lt);                     color: var(--c-plain); }
+.sc-badge.t-cipher  { background: var(--green-lt);                   color: var(--c-cipher); }
+.sc-badge.t-spiffe  { background: rgba(192,132,252,.12);             color: var(--c-spiffe); }
+.sc-badge.t-internal{ background: rgba(100,116,139,.12);             color: var(--c-internal); }
+
+/* ── Detail panel ── */
+.detail-col { position: sticky; top: 60px; }
+.detail-empty {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 40px 20px; text-align: center; color: var(--muted); font-size: 13px;
+}
+.detail-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; display: none;
+}
+.detail-card.visible { display: block; }
+.detail-header {
+  padding: 13px 16px; border-bottom: 1px solid var(--border); background: var(--surface2);
+  display: flex; align-items: center; gap: 8px;
+}
+.detail-step-num { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.detail-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.detail-channel { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+
+.payload-section { border-bottom: 1px solid var(--border); }
+.payload-section:last-child { border-bottom: none; }
+.payload-label {
+  padding: 7px 14px; font-size: 10px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--muted); background: var(--surface3);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 6px;
+}
+.payload-label .direction { font-size: 14px; }
+.payload-pre {
+  padding: 13px 16px; font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+  overflow-x: auto; color: var(--text-dim); white-space: pre;
+  tab-size: 2;
+}
+.hl-key   { color: #79c0ff; }
+.hl-str   { color: #a5d6a7; }
+.hl-val   { color: #ffa657; }
+.hl-warn  { color: var(--c-plain); font-weight: 700; }
+.hl-safe  { color: var(--c-cipher); font-weight: 700; }
+.hl-svid  { color: var(--c-spiffe); font-weight: 700; }
+.hl-dim   { color: var(--muted); font-style: italic; }
+
+/* ── SVG topology styles (used via JS className toggling) ── */
+.topo-node-rect { transition: fill .3s, stroke .3s; }
+.topo-node-label { pointer-events: none; }
+.topo-edge { transition: stroke .3s, stroke-width .3s, stroke-dasharray .3s; }
+.topo-channel { font-size: 9px; pointer-events: none; }
+.topo-zone-label { font-size: 8px; pointer-events: none; }
+
+/* ── Progress bar at bottom of topology ── */
+.topo-progress { height: 2px; background: var(--border); border-radius: 1px; margin-top: 8px; }
+.topo-progress-fill { height: 2px; background: var(--purple); border-radius: 1px; transition: width .3s; width: 0; }
+
+/* ── Key moments callout (encrypt/decrypt visualization) ── */
+.moment-box {
+  padding: 9px 14px; border-radius: 5px; font-size: 12px;
+  display: flex; align-items: flex-start; gap: 8px; margin: 10px 14px;
+}
+.moment-box.enc { background: var(--green-lt); border-left: 2px solid var(--green); color: var(--green); }
+.moment-box.dec { background: var(--red-lt); border-left: 2px solid var(--red); color: var(--red); }
+.moment-box.svid { background: rgba(192,132,252,.1); border-left: 2px solid var(--c-spiffe); color: var(--c-spiffe); }
+.moment-box p { margin: 0; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="logo">vault<span>·</span>secrets<span>·</span>broker</div>
+  <span class="header-sep">/</span>
+  <div class="header-title">Credential Rotation Flow Simulator</div>
+  <div class="header-spacer"></div>
+  <div class="header-actions">
+    <a class="hbtn" href="index.html">← Architecture Overview</a>
+    <button class="hbtn" id="theme-toggle" onclick="toggleTheme()">◑ Theme</button>
+  </div>
+</header>
+
+<main class="main">
+  <!-- Flow selector -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab-approle" onclick="switchFlow('approle')">
+      <span class="tab-dot" style="background:var(--c-auth)"></span>
+      AppRole Flow
+    </button>
+    <button class="tab-btn" id="tab-spiffe" onclick="switchFlow('spiffe')">
+      <span class="tab-dot" style="background:var(--c-spiffe)"></span>
+      SPIFFE / SPIRE Flow
+    </button>
+  </div>
+
+  <!-- SVG Topology -->
+  <div class="topo-wrap">
+    <svg id="topo-svg" viewBox="0 0 860 230" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;height:auto" aria-label="System topology diagram">
+      <defs>
+        <marker id="arrow-fwd" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+          <path d="M 0,0 L 7,3.5 L 0,7 Z" fill="#2a3450" id="arrow-fwd-path"/>
+        </marker>
+        <marker id="arrow-rev" markerWidth="7" markerHeight="7" refX="2" refY="3.5" orient="auto">
+          <path d="M 7,0 L 0,3.5 L 7,7 Z" fill="#2a3450" id="arrow-rev-path"/>
+        </marker>
+        <!-- glow filter for active packet -->
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="3" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+
+      <!-- Security zone shading -->
+      <!-- TLS zone: consumer-vault -->
+      <rect id="zone-tls-cv" x="8" y="20" width="320" height="68" rx="6"
+            fill="rgba(96,165,250,.04)" stroke="rgba(96,165,250,.15)" stroke-width="1" stroke-dasharray="4,3"/>
+      <!-- mTLS zone: vault-api -->
+      <rect id="zone-mtls" x="188" y="20" width="400" height="68" rx="6"
+            fill="rgba(251,191,36,.03)" stroke="rgba(251,191,36,.12)" stroke-width="1" stroke-dasharray="4,3"/>
+      <!-- TLS zone: api-saas -->
+      <rect id="zone-tls-as" x="410" y="20" width="320" height="68" rx="6"
+            fill="rgba(96,165,250,.04)" stroke="rgba(96,165,250,.15)" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- Zone labels -->
+      <text x="16" y="34" class="topo-zone-label" fill="rgba(96,165,250,.6)">TLS 1.3</text>
+      <text x="280" y="34" class="topo-zone-label" fill="rgba(251,191,36,.7)">mTLS</text>
+      <text x="630" y="34" class="topo-zone-label" fill="rgba(96,165,250,.6)">TLS 1.3</text>
+
+      <!-- ── Edges (drawn before nodes so nodes sit on top) ── -->
+
+      <!-- consumer → vault -->
+      <line id="e-cv" class="topo-edge" x1="127" y1="62" x2="192" y2="62"
+            stroke="#2a3450" stroke-width="1.5" marker-end="url(#arrow-fwd)"/>
+
+      <!-- vault → api -->
+      <line id="e-va" class="topo-edge" x1="327" y1="62" x2="413" y2="62"
+            stroke="#2a3450" stroke-width="1.5" marker-end="url(#arrow-fwd)"/>
+
+      <!-- api → saas -->
+      <line id="e-as" class="topo-edge" x1="573" y1="62" x2="668" y2="62"
+            stroke="#2a3450" stroke-width="1.5" marker-end="url(#arrow-fwd)"/>
+
+      <!-- vault ↔ transit (vertical) -->
+      <line id="e-vt" class="topo-edge" x1="260" y1="82" x2="260" y2="158"
+            stroke="#2a3450" stroke-width="1.5" stroke-dasharray="5,3"/>
+
+      <!-- api ↔ transit (diagonal bezier) -->
+      <path id="e-at" class="topo-edge" d="M 413,82 C 413,140 308,140 308,158"
+            stroke="#2a3450" stroke-width="1.5" fill="none" stroke-dasharray="5,3"/>
+
+      <!-- api ↔ spire-agent (diagonal bezier) — hidden in approle -->
+      <path id="e-asa" class="topo-edge" style="display:none"
+            d="M 493,82 C 493,140 637,140 637,158"
+            stroke="#2a3450" stroke-width="1.5" fill="none" stroke-dasharray="5,3"/>
+
+      <!-- spire-agent → spire-server -->
+      <line id="e-aas" class="topo-edge" style="display:none" x1="700" y1="177" x2="728" y2="177"
+            stroke="#2a3450" stroke-width="1.5" marker-end="url(#arrow-fwd)"/>
+
+      <!-- vault → spire-server (long curved, for OIDC validation) -->
+      <path id="e-vs" class="topo-edge" style="display:none"
+            d="M 327,62 C 550,62 550,215 792,195"
+            stroke="#2a3450" stroke-width="1.5" fill="none" stroke-dasharray="5,3"/>
+
+      <!-- ── Channel labels (on edges) ── -->
+      <text id="ch-va" x="370" y="55" text-anchor="middle" class="topo-channel" fill="rgba(251,191,36,.6)">mTLS</text>
+      <text id="ch-at" x="348" y="128" text-anchor="middle" class="topo-channel" fill="#2a3450">Transit</text>
+      <text id="ch-asa" x="565" y="128" text-anchor="middle" class="topo-channel" fill="#2a3450" style="display:none">workload API</text>
+      <text id="ch-vs" x="600" y="210" text-anchor="middle" class="topo-channel" fill="#2a3450" style="display:none">OIDC JWKS</text>
+
+      <!-- ── Nodes ── -->
+
+      <!-- Consumer App -->
+      <g id="node-consumer">
+        <rect x="8" y="42" width="119" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="67" y="57" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">Consumer App</text>
+        <text x="67" y="72" text-anchor="middle" fill="#566080" font-size="9">vault read creds/*</text>
+      </g>
+
+      <!-- HashiCorp Vault -->
+      <g id="node-vault">
+        <rect x="192" y="42" width="135" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="259" y="57" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">HashiCorp Vault</text>
+        <text x="259" y="72" text-anchor="middle" fill="#566080" font-size="9">:8200 · TLS</text>
+      </g>
+
+      <!-- cred-rotation-api -->
+      <g id="node-api">
+        <rect x="413" y="42" width="160" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="493" y="57" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">cred-rotation-api</text>
+        <text x="493" y="72" text-anchor="middle" fill="#566080" font-size="9">:8443 · mTLS</text>
+      </g>
+
+      <!-- SaaS Provider -->
+      <g id="node-saas">
+        <rect x="668" y="42" width="130" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="733" y="57" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">SaaS Provider</text>
+        <text x="733" y="72" text-anchor="middle" fill="#566080" font-size="9">Auth0 · Datadog · …</text>
+      </g>
+
+      <!-- Transit Engine -->
+      <g id="node-transit">
+        <rect x="192" y="158" width="135" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="259" y="173" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">Transit Engine</text>
+        <text x="259" y="188" text-anchor="middle" fill="#566080" font-size="9">AES-256-GCM96</text>
+      </g>
+
+      <!-- SPIRE Agent (hidden in approle) -->
+      <g id="node-spire-a" style="display:none">
+        <rect x="580" y="158" width="120" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="640" y="173" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">SPIRE Agent</text>
+        <text x="640" y="188" text-anchor="middle" fill="#566080" font-size="9">workload attestation</text>
+      </g>
+
+      <!-- SPIRE Server (hidden in approle) -->
+      <g id="node-spire-s" style="display:none">
+        <rect x="728" y="158" width="124" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="790" y="173" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">SPIRE Server</text>
+        <text x="790" y="188" text-anchor="middle" fill="#566080" font-size="9">OIDC provider</text>
+      </g>
+
+      <!-- Animated packet (positioned/colored by JS) -->
+      <circle id="topo-packet" r="7" fill="#60a5fa" filter="url(#glow)" style="display:none;pointer-events:none"/>
+    </svg>
+    <div class="topo-progress"><div class="topo-progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item"><div class="ldot" style="background:var(--c-auth)"></div> Auth / Vault token</div>
+    <div class="legend-item"><div class="ldot" style="background:var(--c-plain)"></div> Plaintext credential ⚠</div>
+    <div class="legend-item"><div class="ldot" style="background:var(--c-cipher)"></div> Transit ciphertext (safe)</div>
+    <div class="legend-item"><div class="ldot" style="background:var(--c-spiffe)"></div> SPIFFE JWT-SVID</div>
+    <div class="legend-item"><div class="ldot" style="background:var(--c-internal)"></div> Internal / plugin</div>
+    <div class="legend-div"></div>
+    <div class="legend-item" style="color:var(--red);font-weight:600">🔴 → 🟢 Transit encrypts here</div>
+    <div class="legend-item" style="color:var(--green);font-weight:600">🟢 → 🔴 Transit decrypts here</div>
+  </div>
+
+  <!-- Event banner (shown on encrypt/decrypt steps) -->
+  <div id="event-banner" class="event-banner"></div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="cbtn" id="btn-reset" onclick="resetFlow()" disabled>↺ Reset</button>
+    <button class="cbtn" id="btn-step" onclick="stepForward()">Step →</button>
+    <button class="cbtn primary" id="btn-play" onclick="togglePlay()">▶ Play</button>
+    <span class="step-counter" id="step-counter">— / —</span>
+    <div class="speed-ctrl">
+      Speed: <input type="range" id="speed-slider" min="1" max="5" value="2"
+                    oninput="updateSpeed(this.value)">
+      <span id="speed-label">Normal</span>
+    </div>
+  </div>
+
+  <!-- Two-column: steps + detail -->
+  <div class="flow-grid">
+    <div class="steps-col">
+      <div class="steps-label">Steps</div>
+      <div class="steps-list" id="steps-list"></div>
+    </div>
+    <div class="detail-col" id="detail-col">
+      <div class="detail-empty" id="detail-empty">
+        Press <strong>Play</strong> or <strong>Step →</strong> to walk through the rotation flow.<br><br>
+        Watch the packet color change as Transit encryption is applied.
+      </div>
+      <div class="detail-card" id="detail-card">
+        <div class="detail-header">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="sc-num" id="d-num"></span>
+              <span class="sc-badge" id="d-badge"></span>
+              <span class="detail-title" id="d-title"></span>
+            </div>
+            <div class="detail-channel" id="d-channel"></div>
+          </div>
+        </div>
+        <div id="d-moment"></div>
+        <div class="payload-section">
+          <div class="payload-label"><span class="direction">→</span> Request / Dispatch</div>
+          <pre class="payload-pre" id="d-req"></pre>
+        </div>
+        <div class="payload-section">
+          <div class="payload-label"><span class="direction">←</span> Response</div>
+          <pre class="payload-pre" id="d-res"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ─────────────────────────────────────────────
+   FLOW DATA
+   ───────────────────────────────────────────── */
+
+const TYPE_META = {
+  auth:     { label: 'Auth Token', color: 'var(--c-auth)',     badge: 't-auth'     },
+  plain:    { label: 'Plaintext',  color: 'var(--c-plain)',    badge: 't-plain'    },
+  cipher:   { label: 'Ciphertext', color: 'var(--c-cipher)',   badge: 't-cipher'   },
+  spiffe:   { label: 'JWT-SVID',   color: 'var(--c-spiffe)',   badge: 't-spiffe'   },
+  internal: { label: 'Internal',   color: 'var(--c-internal)', badge: 't-internal' },
+};
+
+// Shared ciphertext value reused across steps for realism
+const CIPHER = 'vault:v1:AqBpCdEfGhIjKlMn8x7rPqStUvWxYz3mNkL9eRtYuOpAs2dFgHjK1bVcXz';
+const TOKEN  = 's.xK3mNpQrSt7uVwXyZaBcDeF1g';
+const SVID   = 'eyJhbGciOiJSUzI1NiIsImtpZCI6InNwaXJlIn0.eyJzdWIiOiJzcGlmZmU6Ly9leGFtcGxlLm9yZy9jcmVkLXJvdGF0aW9uLWFwaSIsImF1ZCI6WyJ2YXVsdCJdLCJleHAiOjE3NTcwNzcyMDB9.signature';
+
+// AppRole Flow (11 steps)
+const APPROLE_STEPS = [
+  {
+    title: 'AppRole Authentication',
+    fromNode: 'consumer', toNode: 'vault', edge: 'e-cv', reverse: false,
+    type: 'auth',
+    channel: 'TLS 1.3  ·  POST /v1/auth/approle/login',
+    security: 'Consumer identity proven by AppRole role_id + secret_id pair. Vault issues a short-lived token scoped to the cred-consumer policy.',
+    req: `POST /v1/auth/approle/login HTTP/1.1
+Host: vault.internal:8200
+Content-Type: application/json
+
+{
+  <span class="hl-key">"role_id"</span>:   <span class="hl-str">"a4b2c3d4-e5f6-7890-abcd-ef1234567890"</span>,
+  <span class="hl-key">"secret_id"</span>: <span class="hl-str">"b5c6d7e8-f9a0-1234-bcde-f09876543210"</span>
+}`,
+    res: `HTTP/1.1 200 OK
+
+{
+  <span class="hl-key">"auth"</span>: {
+    <span class="hl-key">"client_token"</span>: <span class="hl-str">"${TOKEN}"</span>,
+    <span class="hl-key">"lease_duration"</span>: <span class="hl-val">3600</span>,
+    <span class="hl-key">"policies"</span>: [<span class="hl-str">"default"</span>, <span class="hl-str">"cred-consumer"</span>],
+    <span class="hl-key">"renewable"</span>: <span class="hl-val">true</span>
+  }
+}`,
+  },
+  {
+    title: 'Request Credential Rotation',
+    fromNode: 'consumer', toNode: 'vault', edge: 'e-cv', reverse: false,
+    type: 'auth',
+    channel: 'TLS 1.3  ·  GET /v1/generic/creds/auth0-m2m',
+    security: 'Vault validates the token against the cred-consumer policy. The plugin backend is invoked. Consumer never touches a SaaS API directly.',
+    req: `GET /v1/generic/creds/auth0-m2m HTTP/1.1
+Host: vault.internal:8200
+X-Vault-Token: ${TOKEN}`,
+    res: `<span class="hl-dim">→ dispatched internally to vault-rest-engine plugin</span>`,
+  },
+  {
+    title: 'Plugin Dispatch',
+    fromNode: 'vault', toNode: 'api', edge: 'e-va', reverse: false,
+    type: 'internal',
+    channel: 'mTLS  ·  PKI client certificate  ·  POST /v1/credentials/rotate',
+    security: 'vault-rest-engine presents its PKI-issued client certificate. The API validates it against the internal CA. Certificate = identity — no static bearer token ever sent over the wire.',
+    req: `POST /v1/credentials/rotate HTTP/1.1
+Host: cred-rotation-api:8443
+<span class="hl-dim">// mTLS — client cert from Vault PKI</span>
+Content-Type: application/json
+
+{
+  <span class="hl-key">"provider"</span>:     <span class="hl-str">"auth0"</span>,
+  <span class="hl-key">"resource_id"</span>:  <span class="hl-str">"cl_auth0_m2m_client"</span>,
+  <span class="hl-key">"lease_id"</span>:     <span class="hl-str">"generic/creds/auth0-m2m/Hk2Pm..."</span>
+}`,
+    res: `<span class="hl-dim">→ adapter.Rotate() dispatched to Auth0 adapter</span>`,
+  },
+  {
+    title: 'Rotate at SaaS Provider',
+    fromNode: 'api', toNode: 'saas', edge: 'e-as', reverse: false,
+    type: 'auth',
+    channel: 'TLS 1.3  ·  POST /api/v2/clients/{id}/rotate-secret',
+    security: 'Admin token Transit-decrypted from Vault KV at startup — never stored in env vars or config files. TLS 1.3 minimum enforced in Go HTTP client. The plaintext admin token exists only in process memory.',
+    req: `POST /api/v2/clients/cl_m2m_auth0abc/rotate-secret HTTP/1.1
+Host: example.auth0.com
+Authorization: Bearer <span class="hl-dim">[Transit-decrypted admin token]</span>
+Content-Type: application/json
+
+{}`,
+    res: `<span class="hl-dim">→ Auth0 generates a new client secret…</span>`,
+  },
+  {
+    title: 'New Credential Returned — Plaintext',
+    fromNode: 'saas', toNode: 'api', edge: 'e-as', reverse: true,
+    type: 'plain',
+    channel: 'TLS 1.3  ·  RESPONSE (plaintext within TLS channel)',
+    security: '⚠ This is the ONLY point where the plaintext credential exists outside a provider system. It is inside a TLS 1.3 channel. The adapter immediately calls Transit encrypt — the plaintext never touches disk, logs, or any other function scope.',
+    encrypt: true,
+    req: `HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  <span class="hl-key">"client_id"</span>:     <span class="hl-str">"cl_m2m_auth0abc"</span>,
+  <span class="hl-warn">"client_secret"</span>: <span class="hl-warn">"PLAINTEXT_NEW_SECRET_HERE"</span>
+  <span class="hl-dim">// ⚠ plaintext — must encrypt immediately</span>
+}`,
+    res: `<span class="hl-dim">→ adapter calls Transit encrypt before returning</span>`,
+  },
+  {
+    title: 'Transit Encrypt — AES-256-GCM96',
+    fromNode: 'api', toNode: 'transit', edge: 'e-at', reverse: false,
+    type: 'cipher',
+    channel: 'Vault Transit API  ·  POST /v1/transit/encrypt/cred-rotation-key',
+    security: '🔐 Envelope encryption: Transit generates a unique DEK (data encryption key) for this rotation. The same secret rotated twice produces two unrelated ciphertexts — replay attacks blocked at the envelope level. Plaintext exists in memory for microseconds.',
+    encrypt: true,
+    req: `POST /v1/transit/encrypt/cred-rotation-key HTTP/1.1
+Host: vault.internal:8200
+X-Vault-Token: ${TOKEN}
+Content-Type: application/json
+
+{
+  <span class="hl-key">"plaintext"</span>: <span class="hl-str">"UEVBR0VEX0NMSUVOVFNFQlJFVA=="</span>
+  <span class="hl-dim">// base64(plaintext_secret)</span>
+}`,
+    res: `HTTP/1.1 200 OK
+
+{
+  <span class="hl-key">"data"</span>: {
+    <span class="hl-safe">"ciphertext"</span>: <span class="hl-safe">"${CIPHER}"</span>
+  }
+}
+<span class="hl-dim">// 🟢 safe to store, safe to log, safe to send over mTLS</span>`,
+  },
+  {
+    title: 'Encrypted Response to Plugin',
+    fromNode: 'api', toNode: 'vault', edge: 'e-va', reverse: true,
+    type: 'cipher',
+    channel: 'mTLS  ·  PKI client certificate  ·  RESPONSE',
+    security: 'Only the vault:v1: ciphertext travels over mTLS back to the plugin. The plugin never receives plaintext. Even a compromised mTLS key reveals only ciphertext — useless without Transit master key access.',
+    req: `HTTP/1.1 200 OK
+<span class="hl-dim">// mTLS — ciphertext in response body</span>
+Content-Type: application/json
+
+{
+  <span class="hl-safe">"encrypted_value"</span>: <span class="hl-safe">"${CIPHER}"</span>,
+  <span class="hl-key">"rotated_at"</span>:     <span class="hl-str">"2026-09-06T14:23:01Z"</span>,
+  <span class="hl-key">"credential_id"</span>:  <span class="hl-str">"generic/creds/auth0-m2m/Hk2Pm..."</span>
+}`,
+    res: `<span class="hl-dim">→ plugin receives ciphertext, calls Transit decrypt</span>`,
+  },
+  {
+    title: 'Plugin Decrypts — Transit',
+    fromNode: 'vault', toNode: 'transit', edge: 'e-vt', reverse: false,
+    type: 'cipher',
+    channel: 'Vault Transit API  ·  POST /v1/transit/decrypt/cred-rotation-key',
+    security: 'The plugin uses its own Vault token (scoped to transit decrypt only) to unwrap the ciphertext. Plaintext is reconstructed in plugin process memory. It will be passed to Vault logical storage only long enough to return to the consumer — never written to disk.',
+    decrypt: true,
+    req: `POST /v1/transit/decrypt/cred-rotation-key HTTP/1.1
+Host: vault.internal:8200
+X-Vault-Token: ${TOKEN}
+Content-Type: application/json
+
+{
+  <span class="hl-safe">"ciphertext"</span>: <span class="hl-safe">"${CIPHER}"</span>
+}`,
+    res: `<span class="hl-dim">→ Transit unwraps DEK, decrypts with AES-256-GCM96</span>`,
+  },
+  {
+    title: 'Plaintext in Plugin Memory',
+    fromNode: 'transit', toNode: 'vault', edge: 'e-vt', reverse: true,
+    type: 'plain',
+    channel: 'Vault Transit API  ·  RESPONSE',
+    security: '⚠ Plaintext credential is now in plugin process memory only. It will be returned to Vault core via the SDK response. It is NEVER written to disk, never logged, never stored in KV. Memory is zeroed when the function returns.',
+    decrypt: true,
+    req: `HTTP/1.1 200 OK
+
+{
+  <span class="hl-key">"data"</span>: {
+    <span class="hl-warn">"plaintext"</span>: <span class="hl-warn">"UEVBR0VEX0NMSUVOVFNFQlJFVA=="</span>
+    <span class="hl-dim">// base64 — decoded to raw secret in plugin memory</span>
+  }
+}`,
+    res: `<span class="hl-dim">→ plugin decodes base64, builds Vault lease response</span>`,
+  },
+  {
+    title: 'Vault Writes Lease',
+    fromNode: 'vault', toNode: 'vault', edge: 'e-cv', reverse: false,
+    type: 'internal',
+    channel: 'Internal  ·  Vault logical storage  ·  lease TTL: 86400s',
+    security: 'Vault creates a 24-hour lease. On expiry, Vault automatically calls the plugin revoke() callback, which calls POST /v1/credentials/revoke on cred-rotation-api — the SaaS credential is immediately invalidated.',
+    req: `<span class="hl-dim">// Vault internal: write lease to Vault storage</span>
+backend.Secret("generic").Renew()
+→ LeaseID:   <span class="hl-str">"generic/creds/auth0-m2m/Hk2Pm..."</span>
+   LeaseTTL: <span class="hl-val">86400</span>
+   Renewable: <span class="hl-val">true</span>`,
+    res: `<span class="hl-dim">→ Vault returns response to consumer over TLS</span>`,
+  },
+  {
+    title: 'Credential Returned to Consumer',
+    fromNode: 'vault', toNode: 'consumer', edge: 'e-cv', reverse: true,
+    type: 'plain',
+    channel: 'TLS 1.3  ·  RESPONSE  ·  Lease: 24 hours',
+    security: 'Authorized disclosure to the authenticated consumer over TLS 1.3. Credential is valid for 24 hours. After expiry, Vault calls /v1/credentials/revoke and the SaaS provider invalidates it — there is no window where a leaked credential is permanently valid.',
+    req: `HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  <span class="hl-key">"lease_id"</span>:       <span class="hl-str">"generic/creds/auth0-m2m/Hk2Pm..."</span>,
+  <span class="hl-key">"lease_duration"</span>: <span class="hl-val">86400</span>,
+  <span class="hl-key">"renewable"</span>:      <span class="hl-val">true</span>,
+  <span class="hl-key">"data"</span>: {
+    <span class="hl-warn">"client_secret"</span>: <span class="hl-warn">"new_rotated_secret_value"</span>
+  }
+}
+<span class="hl-dim">// credential expires in 24h → auto-revoked on SaaS side</span>`,
+    res: `<span class="hl-dim">→ consumer uses credential until lease expires</span>`,
+  },
+];
+
+// SPIFFE/SPIRE Flow (4 pre-steps + same 9 rotation steps, shared where possible)
+const SPIFFE_STEPS = [
+  {
+    title: 'Fetch JWT-SVID from SPIRE Agent',
+    fromNode: 'api', toNode: 'spire-a', edge: 'e-asa', reverse: false,
+    type: 'spiffe',
+    channel: 'workload API  ·  gRPC unix socket  ·  FetchJWTSVID()',
+    security: 'The cred-rotation-api workload calls the SPIRE Agent via unix domain socket. No TLS needed — the socket is filesystem-protected. SPIRE has already attested this process via OS-level selectors at startup.',
+    spiffe: true,
+    req: `<span class="hl-dim">// gRPC workload API — unix socket</span>
+FetchJWTSVID(
+  audience: [<span class="hl-str">"vault"</span>],
+  spiffe_id: <span class="hl-str">"spiffe://example.org/cred-rotation-api"</span>
+)`,
+    res: `<span class="hl-dim">→ SPIRE Agent checks workload attestation, issues SVID</span>`,
+  },
+  {
+    title: 'JWT-SVID Issued by SPIRE Agent',
+    fromNode: 'spire-a', toNode: 'api', edge: 'e-asa', reverse: true,
+    type: 'spiffe',
+    channel: 'workload API  ·  RESPONSE  ·  TTL: 5 minutes',
+    security: 'The JWT-SVID carries the workload\'s SPIFFE ID as the "sub" claim and is signed by SPIRE Server\'s CA. Valid for 5 minutes — even if captured, the token expires before it can be reused. No static Vault token is ever stored on disk.',
+    spiffe: true,
+    req: `JWTSVIDResponse {
+  <span class="hl-svid">"jwt"</span>: <span class="hl-svid">"${SVID}"</span>,
+  <span class="hl-key">"spiffe_id"</span>: <span class="hl-str">"spiffe://example.org/cred-rotation-api"</span>,
+  <span class="hl-key">"hint"</span>: <span class="hl-str">"workload-attested"</span>,
+  <span class="hl-key">"expires_at"</span>: <span class="hl-val">1757077200</span> <span class="hl-dim">// 5-minute TTL</span>
+}`,
+    res: `<span class="hl-dim">→ API uses JWT-SVID to authenticate to Vault</span>`,
+  },
+  {
+    title: 'JWT Auth Login to Vault',
+    fromNode: 'api', toNode: 'vault', edge: 'e-va', reverse: true,
+    type: 'spiffe',
+    channel: 'TLS 1.3  ·  POST /v1/auth/jwt/login',
+    security: 'No static AppRole secret_id. cred-rotation-api presents its JWT-SVID as the credential. Vault\'s JWT auth method is configured with the SPIRE trust domain — only SVIDs from this trust domain are accepted.',
+    spiffe: true,
+    req: `POST /v1/auth/jwt/login HTTP/1.1
+Host: vault.internal:8200
+Content-Type: application/json
+
+{
+  <span class="hl-svid">"jwt"</span>:  <span class="hl-svid">"${SVID.slice(0,40)}…"</span>,
+  <span class="hl-key">"role"</span>: <span class="hl-str">"cred-rotation-api"</span>
+}`,
+    res: `<span class="hl-dim">→ Vault validates JWT via SPIRE OIDC endpoint</span>`,
+  },
+  {
+    title: 'Vault Validates SVID via OIDC',
+    fromNode: 'vault', toNode: 'spire-s', edge: 'e-vs', reverse: false,
+    type: 'spiffe',
+    channel: 'TLS 1.3  ·  GET /.well-known/jwks.json  ·  SPIRE OIDC',
+    security: 'Vault fetches SPIRE\'s JWKS endpoint to cryptographically validate the JWT-SVID signature. SPIRE Server acts as an OIDC provider. Vault caches the JWKS; only signature verification happens here — no token exchange.',
+    spiffe: true,
+    req: `GET /.well-known/jwks.json HTTP/1.1
+Host: spire-server:8080 <span class="hl-dim">// OIDC discovery endpoint</span>`,
+    res: `{
+  <span class="hl-key">"keys"</span>: [{
+    <span class="hl-key">"kty"</span>: <span class="hl-str">"RSA"</span>, <span class="hl-key">"kid"</span>: <span class="hl-str">"spire"</span>,
+    <span class="hl-key">"n"</span>: <span class="hl-str">"qGnq7Hd2..."</span>, <span class="hl-key">"e"</span>: <span class="hl-str">"AQAB"</span>
+  }]
+}
+<span class="hl-dim">→ Vault verifies JWT signature, trust domain, audience</span>`,
+  },
+  {
+    title: 'Short-Lived Vault Token Issued',
+    fromNode: 'vault', toNode: 'api', edge: 'e-va', reverse: false,
+    type: 'auth',
+    channel: 'TLS 1.3  ·  RESPONSE  ·  Token TTL: 5 minutes',
+    security: 'Vault issues a short-lived (5 min) token scoped to the cred-rotation-api policy. Even if this token is captured, it expires in 5 minutes — well before a rotation cycle. No static Vault tokens on disk, anywhere.',
+    spiffe: true,
+    req: `HTTP/1.1 200 OK
+
+{
+  <span class="hl-key">"auth"</span>: {
+    <span class="hl-key">"client_token"</span>: <span class="hl-str">"s.short5min..."</span>,
+    <span class="hl-key">"lease_duration"</span>: <span class="hl-val">300</span>,
+    <span class="hl-key">"policies"</span>: [<span class="hl-str">"cred-rotation-api"</span>],
+    <span class="hl-key">"metadata"</span>: {
+      <span class="hl-key">"spiffe_id"</span>: <span class="hl-str">"spiffe://example.org/cred-rotation-api"</span>
+    }
+  }
+}`,
+    res: `<span class="hl-dim">→ API uses this token for Transit calls during rotation</span>`,
+  },
+  // Shared rotation steps (same as AppRole steps 2-10 with small tweaks)
+  ...APPROLE_STEPS.slice(2).map(s => ({...s})),
+];
+
+const FLOWS = {
+  approle: { steps: APPROLE_STEPS, spiffeNodes: false },
+  spiffe:  { steps: SPIFFE_STEPS,  spiffeNodes: true  },
+};
+
+/* ─────────────────────────────────────────────
+   STATE
+   ───────────────────────────────────────────── */
+let currentFlow = 'approle';
+let currentStep = -1;
+let playing     = false;
+let playTimer   = null;
+let speedMs     = 2400; // ms per step auto-play
+
+const SPEED_MAP = { 1: 4000, 2: 2400, 3: 1600, 4: 1000, 5: 600 };
+const SPEED_LABELS = { 1: 'Slow', 2: 'Normal', 3: 'Fast', 4: 'Faster', 5: 'Max' };
+
+/* ─────────────────────────────────────────────
+   TOPOLOGY: node/edge SVG manipulation
+   ───────────────────────────────────────────── */
+const NODE_IDS = ['consumer','vault','api','saas','transit','spire-a','spire-s'];
+const EDGE_IDS = ['e-cv','e-va','e-as','e-vt','e-at','e-asa','e-aas','e-vs'];
+const SPIFFE_ELEMENTS = ['node-spire-a','node-spire-s','e-asa','e-aas','e-vs','ch-asa','ch-vs'];
+
+function setNodeActive(nodeId, type) {
+  const g = document.getElementById('node-' + nodeId);
+  if (!g) return;
+  const rect = g.querySelector('rect');
+  const texts = g.querySelectorAll('text');
+  const color = type ? TYPE_META[type].color : null;
+  if (color) {
+    rect.style.stroke = color;
+    rect.style.fill = color.replace('var(--c-', 'rgba(').replace(')', ', .08)').replace('--c-','');
+    // fallback: just do opacity trick
+    rect.setAttribute('stroke', color);
+    rect.setAttribute('fill', 'rgba(30,30,60,0.95)');
+    texts[0] && (texts[0].setAttribute('fill', '#e2e8f8'));
+    texts[1] && (texts[1].setAttribute('fill', color));
+  } else {
+    rect.setAttribute('stroke', '#2a3450');
+    rect.setAttribute('fill', '#131826');
+    texts[0] && (texts[0].setAttribute('fill', '#8fa3cc'));
+    texts[1] && (texts[1].setAttribute('fill', '#566080'));
+  }
+}
+
+function setEdgeActive(edgeId, type, reverse) {
+  const el = document.getElementById(edgeId);
+  if (!el) return;
+  const color = type ? TYPE_META[type].color : null;
+  if (color) {
+    el.setAttribute('stroke', color);
+    el.setAttribute('stroke-width', '2.5');
+    el.setAttribute('stroke-dasharray', '');
+    // animate packet
+    animatePacket(edgeId, type, reverse);
+  } else {
+    const dashed = ['e-vt','e-at','e-asa','e-vs'].includes(edgeId);
+    el.setAttribute('stroke', '#2a3450');
+    el.setAttribute('stroke-width', '1.5');
+    el.setAttribute('stroke-dasharray', dashed ? '5,3' : '');
+  }
+}
+
+function clearTopology() {
+  NODE_IDS.forEach(id => setNodeActive(id, null));
+  EDGE_IDS.forEach(id => setEdgeActive(id, null, false));
+  // reset arrows
+  document.getElementById('arrow-fwd-path')?.setAttribute('fill','#2a3450');
+  document.getElementById('arrow-rev-path')?.setAttribute('fill','#2a3450');
+  // hide packet
+  const pkt = document.getElementById('topo-packet');
+  if (pkt) pkt.style.display = 'none';
+}
+
+function applyTopology(step) {
+  clearTopology();
+  if (!step) return;
+  setNodeActive(step.fromNode, step.type);
+  if (step.toNode !== step.fromNode) setNodeActive(step.toNode, step.type);
+  setEdgeActive(step.edge, step.type, step.reverse);
+}
+
+/* ─────────────────────────────────────────────
+   PACKET ANIMATION
+   ───────────────────────────────────────────── */
+
+// Edge path data for packet animation (approx. midpoints + directions)
+// We animate the packet by interpolating along predefined point arrays
+const EDGE_PATHS = {
+  'e-cv':  { pts: [[127,62],[192,62]],           curve: false },
+  'e-va':  { pts: [[327,62],[413,62]],           curve: false },
+  'e-as':  { pts: [[573,62],[668,62]],           curve: false },
+  'e-vt':  { pts: [[260,82],[260,158]],          curve: false },
+  'e-at':  { pts: [[413,82],[413,140],[308,140],[308,158]], curve: true },
+  'e-asa': { pts: [[493,82],[493,140],[637,140],[637,158]], curve: true },
+  'e-aas': { pts: [[700,177],[728,177]],         curve: false },
+  'e-vs':  { pts: [[327,62],[550,62],[550,215],[792,195]], curve: true },
+};
+
+let packetAnim = null;
+
+function animatePacket(edgeId, type, reverse) {
+  const pkt = document.getElementById('topo-packet');
+  if (!pkt) return;
+  const path = EDGE_PATHS[edgeId];
+  if (!path) { pkt.style.display = 'none'; return; }
+
+  const color = TYPE_META[type]?.color || 'var(--purple)';
+  pkt.setAttribute('fill', color);
+  pkt.style.display = 'block';
+  pkt.style.filter = 'url(#glow)';
+
+  // Cancel previous animation
+  if (packetAnim) { cancelAnimationFrame(packetAnim); packetAnim = null; }
+
+  let pts = path.pts;
+  if (reverse) pts = [...pts].reverse();
+
+  const dur = Math.min(speedMs * 0.7, 1200);
+  let start = null;
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function getPos(t) {
+    // Walk through segments proportionally
+    const n = pts.length - 1;
+    const seg = t * n;
+    const i = Math.min(Math.floor(seg), n - 1);
+    const u = seg - i;
+    return [
+      lerp(pts[i][0], pts[i+1][0], u),
+      lerp(pts[i][1], pts[i+1][1], u),
+    ];
+  }
+
+  function easeInOut(t) { return t < .5 ? 2*t*t : -1+(4-2*t)*t; }
+
+  function frame(ts) {
+    if (!start) start = ts;
+    const elapsed = ts - start;
+    const t = Math.min(elapsed / dur, 1);
+    const [x, y] = getPos(easeInOut(t));
+    pkt.setAttribute('cx', x);
+    pkt.setAttribute('cy', y);
+    if (t < 1) {
+      packetAnim = requestAnimationFrame(frame);
+    } else {
+      // Pulse at destination
+      pkt.style.r = 9;
+      setTimeout(() => { pkt.style.r = 7; }, 200);
+    }
+  }
+  packetAnim = requestAnimationFrame(frame);
+}
+
+/* ─────────────────────────────────────────────
+   RENDER
+   ───────────────────────────────────────────── */
+function buildStepList() {
+  const list = document.getElementById('steps-list');
+  list.innerHTML = '';
+  const steps = FLOWS[currentFlow].steps;
+  steps.forEach((s, i) => {
+    const div = document.createElement('div');
+    div.className = `step-card t-${s.type}`;
+    div.id = `step-card-${i}`;
+    div.onclick = () => jumpTo(i);
+    div.innerHTML = `
+      <div class="sc-head">
+        <span class="sc-num">${String(i+1).padStart(2,'0')}</span>
+        <span class="sc-badge t-${s.type}">${TYPE_META[s.type].label}</span>
+        <span class="sc-title">${s.title}</span>
+      </div>
+      <div class="sc-route">${s.channel.split('·')[0].trim()} · ${s.fromNode === s.toNode ? s.fromNode : (s.reverse ? s.toNode + ' → ' + s.fromNode : s.fromNode + ' → ' + s.toNode)}</div>
+      ${s.security ? `<div class="sc-security">${s.security}</div>` : ''}
+    `;
+    list.appendChild(div);
+  });
+}
+
+function updateStepList(idx) {
+  const steps = FLOWS[currentFlow].steps;
+  steps.forEach((_, i) => {
+    const card = document.getElementById(`step-card-${i}`);
+    if (!card) return;
+    card.classList.remove('active','past','revealed');
+    if (i < idx) card.classList.add('past','revealed');
+    else if (i === idx) card.classList.add('active','revealed');
+  });
+}
+
+function updateDetail(idx) {
+  const steps = FLOWS[currentFlow].steps;
+  const empty = document.getElementById('detail-empty');
+  const card  = document.getElementById('detail-card');
+  const banner = document.getElementById('event-banner');
+
+  if (idx < 0 || idx >= steps.length) {
+    empty.style.display = '';
+    card.classList.remove('visible');
+    banner.className = 'event-banner';
+    banner.textContent = '';
+    return;
+  }
+  const s = steps[idx];
+  empty.style.display = 'none';
+  card.classList.add('visible');
+
+  document.getElementById('d-num').textContent   = `Step ${idx+1}/${steps.length}`;
+  document.getElementById('d-title').textContent = s.title;
+  document.getElementById('d-channel').textContent = s.channel;
+
+  const badge = document.getElementById('d-badge');
+  badge.textContent = TYPE_META[s.type].label;
+  badge.className = `sc-badge t-${s.type}`;
+
+  document.getElementById('d-req').innerHTML = s.req || '';
+  document.getElementById('d-res').innerHTML = s.res || '';
+
+  // Moment box (encrypt/decrypt/spiffe)
+  const moment = document.getElementById('d-moment');
+  if (s.encrypt) {
+    moment.innerHTML = `<div class="moment-box enc">🔴 → 🟢 <p>Transit AES-256-GCM96 encryption applied here. The red plaintext credential becomes a teal vault:v1: ciphertext. After this call, the plaintext can be discarded — only ciphertext travels further.</p></div>`;
+  } else if (s.decrypt) {
+    moment.innerHTML = `<div class="moment-box dec">🟢 → 🔴 <p>Transit decryption happens here — in plugin process memory only. The plaintext credential is reconstructed for the authorized consumer. It is NEVER written to disk or logged.</p></div>`;
+  } else if (s.spiffe) {
+    moment.innerHTML = `<div class="moment-box svid">⬡ SPIFFE <p>Workload identity — no static secrets. SPIRE attests the workload, issues a cryptographically-signed JWT-SVID. Short-lived (5 min), audience-scoped to Vault.</p></div>`;
+  } else {
+    moment.innerHTML = '';
+  }
+
+  // Event banner
+  if (s.encrypt && s.type === 'plain') {
+    banner.className = 'event-banner visible decrypt';
+    banner.innerHTML = '⚠ Plaintext credential in flight — Transit encrypt call begins immediately';
+  } else if (s.encrypt) {
+    banner.className = 'event-banner visible encrypt';
+    banner.innerHTML = '🔐 AES-256-GCM96 encryption applied — packet color changes 🔴 → 🟢';
+  } else if (s.decrypt && s.type === 'cipher') {
+    banner.className = 'event-banner visible encrypt';
+    banner.innerHTML = '🔐 Plugin requests Transit decrypt — ciphertext about to become plaintext';
+  } else if (s.decrypt) {
+    banner.className = 'event-banner visible decrypt';
+    banner.innerHTML = '⚠ Plaintext in plugin process memory only — never written to disk';
+  } else if (s.spiffe) {
+    banner.className = 'event-banner visible spiffe';
+    banner.innerHTML = '⬡ SPIFFE workload identity — zero static secrets, cryptographic attestation';
+  } else {
+    banner.className = 'event-banner';
+    banner.textContent = '';
+  }
+}
+
+function updateControls(idx) {
+  const steps = FLOWS[currentFlow].steps;
+  const total = steps.length;
+  document.getElementById('step-counter').textContent = idx < 0 ? `— / ${total}` : `${idx+1} / ${total}`;
+  document.getElementById('btn-reset').disabled = idx < 0;
+  document.getElementById('btn-step').disabled  = idx >= total - 1;
+  // progress bar
+  const pct = idx < 0 ? 0 : ((idx+1) / total * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+function render(idx) {
+  currentStep = idx;
+  const steps = FLOWS[currentFlow].steps;
+  const step  = idx >= 0 ? steps[idx] : null;
+  applyTopology(step);
+  updateStepList(idx);
+  updateDetail(idx);
+  updateControls(idx);
+}
+
+/* ─────────────────────────────────────────────
+   SPIFFE NODE VISIBILITY
+   ───────────────────────────────────────────── */
+function applySpiffeVisibility(show) {
+  SPIFFE_ELEMENTS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = show ? '' : 'none';
+  });
+  // Extend zone-tls-as and zone-mtls for SPIFFE (saas shifts left slightly in SPIFFE flow)
+}
+
+/* ─────────────────────────────────────────────
+   CONTROLS
+   ───────────────────────────────────────────── */
+function switchFlow(flow) {
+  if (playing) togglePlay();
+  currentFlow = flow;
+  document.getElementById('tab-approle').classList.toggle('active', flow === 'approle');
+  document.getElementById('tab-spiffe').classList.toggle('active', flow === 'spiffe');
+  applySpiffeVisibility(FLOWS[flow].spiffeNodes);
+  buildStepList();
+  render(-1);
+}
+
+function stepForward() {
+  const total = FLOWS[currentFlow].steps.length;
+  if (currentStep < total - 1) render(currentStep + 1);
+  else if (playing) stopPlay();
+}
+
+function jumpTo(idx) {
+  if (playing) stopPlay();
+  render(idx);
+}
+
+function resetFlow() {
+  if (playing) stopPlay();
+  render(-1);
+}
+
+function togglePlay() {
+  playing ? stopPlay() : startPlay();
+}
+
+function startPlay() {
+  playing = true;
+  const btn = document.getElementById('btn-play');
+  btn.textContent = '⏸ Pause';
+  btn.classList.add('playing');
+  stepForward();
+  playTimer = setInterval(() => {
+    const total = FLOWS[currentFlow].steps.length;
+    if (currentStep >= total - 1) { stopPlay(); return; }
+    stepForward();
+  }, speedMs);
+}
+
+function stopPlay() {
+  playing = false;
+  clearInterval(playTimer);
+  playTimer = null;
+  const btn = document.getElementById('btn-play');
+  btn.textContent = '▶ Play';
+  btn.classList.remove('playing');
+}
+
+function updateSpeed(val) {
+  speedMs = SPEED_MAP[val];
+  document.getElementById('speed-label').textContent = SPEED_LABELS[val];
+  if (playing) { stopPlay(); startPlay(); }
+}
+
+/* ─────────────────────────────────────────────
+   THEME
+   ───────────────────────────────────────────── */
+function toggleTheme() {
+  const root = document.documentElement;
+  const current = root.dataset.theme;
+  root.dataset.theme = current === 'dark' ? 'light' : current === 'light' ? '' : 'dark';
+  if (!root.dataset.theme) delete root.dataset.theme;
+}
+
+/* ─────────────────────────────────────────────
+   INIT
+   ───────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  buildStepList();
+  render(-1);
+  updateSpeed(2);
+});
+</script>
+</body>
+</html>
