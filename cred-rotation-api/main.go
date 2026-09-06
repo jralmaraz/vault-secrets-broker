@@ -17,6 +17,8 @@ import (
 	auth0adapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/auth0"
 	datadogadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/datadog"
 	githubadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/github"
+	pagerdutyAdapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/pagerduty"
+	sonarqubeadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/sonarqube"
 	splunkadapter "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter/splunk"
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/server"
 	vclient "github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/vault"
@@ -90,11 +92,31 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("build datadog adapter: %w", err)
 	}
 
+	sonarqubeCfg, err := loadSonarQubeConfig(ctx, vc, transitKeyName)
+	if err != nil {
+		return fmt.Errorf("load sonarqube config: %w", err)
+	}
+	sonarqubeAdapter, err := sonarqubeadapter.New(sonarqubeCfg, sonarqubeadapter.WithLogger(logger))
+	if err != nil {
+		return fmt.Errorf("build sonarqube adapter: %w", err)
+	}
+
+	pagerdutyConfig, err := loadPagerDutyConfig(ctx, vc, transitKeyName)
+	if err != nil {
+		return fmt.Errorf("load pagerduty config: %w", err)
+	}
+	pagerdutyadapter, err := pagerdutyAdapter.New(pagerdutyConfig, pagerdutyAdapter.WithLogger(logger))
+	if err != nil {
+		return fmt.Errorf("build pagerduty adapter: %w", err)
+	}
+
 	reg := adapter.NewRegistry()
 	reg.Register(auth0Adapter)
 	reg.Register(splunkAdapter)
 	reg.Register(githubAdapter)
 	reg.Register(datadogAdapter)
+	reg.Register(sonarqubeAdapter)
+	reg.Register(pagerdutyadapter)
 	logger.Info("adapters registered", "providers", reg.Names())
 
 	// ── mTLS TLS config ───────────────────────────────────────────────────────
@@ -280,6 +302,70 @@ func loadDatadogConfig(ctx context.Context, vc *vclient.Client, transitKey strin
 	// key_type is optional — absent means api_key.
 	if keyType, _ := vclient.StringField(data, "key_type"); keyType != "" {
 		cfg.KeyType = keyType
+	}
+	return cfg, nil
+}
+
+// loadSonarQubeConfig reads SonarQube adapter configuration from Vault KV v2 and
+// decrypts the admin token using Transit before returning.
+func loadSonarQubeConfig(ctx context.Context, vc *vclient.Client, transitKey string) (sonarqubeadapter.Config, error) {
+	const kvPath = "secret/data/cred-rotation-api/adapters/sonarqube"
+
+	data, err := vc.KVGet(ctx, kvPath)
+	if err != nil {
+		return sonarqubeadapter.Config{}, fmt.Errorf("kv read %s: %w", kvPath, err)
+	}
+
+	baseURL, err := vclient.StringField(data, "base_url")
+	if err != nil {
+		return sonarqubeadapter.Config{}, err
+	}
+	encryptedToken, err := vclient.StringField(data, "admin_token_encrypted")
+	if err != nil {
+		return sonarqubeadapter.Config{}, err
+	}
+
+	plainToken, err := vc.TransitDecrypt(ctx, transitKey, encryptedToken)
+	if err != nil {
+		return sonarqubeadapter.Config{}, fmt.Errorf("transit decrypt admin_token: %w", err)
+	}
+
+	return sonarqubeadapter.Config{
+		BaseURL:    baseURL,
+		AdminToken: plainToken,
+	}, nil
+}
+
+// loadPagerDutyConfig reads PagerDuty adapter configuration from Vault KV v2 and
+// decrypts the API key using Transit before returning.
+func loadPagerDutyConfig(ctx context.Context, vc *vclient.Client, transitKey string) (pagerdutyAdapter.Config, error) {
+	const kvPath = "secret/data/cred-rotation-api/adapters/pagerduty"
+
+	data, err := vc.KVGet(ctx, kvPath)
+	if err != nil {
+		return pagerdutyAdapter.Config{}, fmt.Errorf("kv read %s: %w", kvPath, err)
+	}
+
+	encryptedAPIKey, err := vclient.StringField(data, "api_key_encrypted")
+	if err != nil {
+		return pagerdutyAdapter.Config{}, err
+	}
+	email, err := vclient.StringField(data, "email")
+	if err != nil {
+		return pagerdutyAdapter.Config{}, err
+	}
+
+	plainAPIKey, err := vc.TransitDecrypt(ctx, transitKey, encryptedAPIKey)
+	if err != nil {
+		return pagerdutyAdapter.Config{}, fmt.Errorf("transit decrypt api_key: %w", err)
+	}
+
+	cfg := pagerdutyAdapter.Config{
+		APIKey: plainAPIKey,
+		Email:  email,
+	}
+	if baseURL, _ := vclient.StringField(data, "base_url"); baseURL != "" {
+		cfg.BaseURL = baseURL
 	}
 	return cfg, nil
 }
