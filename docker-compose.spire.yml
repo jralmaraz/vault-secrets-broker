@@ -1,0 +1,107 @@
+# SPIRE end-to-end integration test stack.
+#
+# Do not use in production — TLS is disabled for test simplicity.
+#
+# Usage: scripts/integration-test-spire.sh
+# Direct Makefile target: make test-integration-spire
+#
+# Services:
+#   vault-dev         — Vault in dev mode (root token: integ-test-token)
+#   spire-server      — SPIRE server (join_token node attestor)
+#   oidc-provider     — SPIRE OIDC discovery provider (serves JWKS for Vault)
+#   spire-agent       — SPIRE agent (unix workload attestor, pid:host)
+#   spire-test-runner — Compiled Go integration test binary (profile: test)
+#
+# Notes:
+#   - SPIRE 1.11.x images are distroless (no shell/wget/curl).
+#     Readiness is checked by the setup script via host-exposed ports.
+#   - The SPIRE agent join token is passed via a compose override generated
+#     at runtime by integration-test-spire.sh (see SPIRE_AGENT_JOIN_TOKEN env).
+
+services:
+
+  vault-dev:
+    image: hashicorp/vault:1.18
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: integ-test-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_LOG_LEVEL: warn
+    ports:
+      - "18200:8200"
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      # Pre-create the agent-socket named volume here so it exists before
+      # spire-agent and spire-test-runner try to use it.
+      - agent-socket:/tmp/.spire-pre-create
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.11.1
+    volumes:
+      - ./spire/server.conf:/etc/spire/server/server.conf:ro
+      - spire-server-data:/tmp/spire-server
+    # ENTRYPOINT: ["/opt/spire/bin/spire-server", "run"] — command appends as CMD args.
+    command:
+      - -config
+      - /etc/spire/server/server.conf
+    ports:
+      - "18081:8081"   # gRPC API for join token generation from host
+      - "18080:8080"   # HTTP health — polled by script (distroless: no curl inside)
+
+  oidc-provider:
+    image: ghcr.io/spiffe/oidc-discovery-provider:1.11.1
+    depends_on:
+      - spire-server
+    volumes:
+      - ./spire/oidc-provider.conf:/etc/spire/oidc-discovery-provider/config.conf:ro
+      - spire-server-data:/tmp/spire-server:ro
+    # ENTRYPOINT: ["/opt/spire/bin/oidc-discovery-provider"] — command appends as CMD args.
+    command:
+      - -config
+      - /etc/spire/oidc-discovery-provider/config.conf
+    ports:
+      - "18083:8080"   # JWKS endpoint — polled by script; Vault fetches via service name internally
+
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.11.1
+    depends_on:
+      - spire-server
+    pid: "host"   # required: unix workload attestor reads /proc to identify callers by UID
+    volumes:
+      - ./spire/agent.conf:/etc/spire/agent/agent.conf:ro
+      - agent-socket:/run/spire   # workload API socket, shared with test runner
+    # ENTRYPOINT: ["/opt/spire/bin/spire-agent", "run"] — command appends as CMD args.
+    # The -joinToken flag is appended at runtime by integration-test-spire.sh via compose override.
+    command:
+      - -config
+      - /etc/spire/agent/agent.conf
+    ports:
+      - "18082:8080"   # agent health — polled by script
+
+  spire-test-runner:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.spire-test
+    profiles: ["test"]
+    depends_on:
+      - spire-agent
+      - vault-dev
+    pid: "host"   # unix workload attestor requires same PID namespace as agent
+    volumes:
+      - agent-socket:/run/spire:ro
+    # UID 65532 — Chainguard static nonroot user; matches the unix:uid workload entry selector.
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent.sock
+      VAULT_ADDR: http://vault-dev:8200
+      VAULT_JWT_MOUNT: auth/jwt/login
+      VAULT_JWT_ROLE: cred-rotation-api
+      VAULT_SPIFFE_TRUST_DOMAIN: example.org
+
+volumes:
+  spire-server-data:  # shared between spire-server and oidc-provider
+  agent-socket:       # SPIRE workload API socket (spire-agent → spire-test-runner)

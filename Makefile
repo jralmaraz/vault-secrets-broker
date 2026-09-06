@@ -3,10 +3,11 @@ VAULT        := /opt/homebrew/bin/vault
 GOLANGCI     := golangci-lint
 GOVULNCHECK  := govulncheck
 
-.PHONY: setup setup-phase2 setup-phase3 setup-phase4 stop status \
+.PHONY: setup setup-phase2 setup-phase3 setup-phase4 setup-phase6 stop status \
         build-rest-engine build-auth0-engine build-api build \
         build-plugin-rest-engine build-plugin-auth0-engine \
         test-rest-engine test-auth0-engine test-api test test-integration \
+        test-integration-spire \
         fmt vet lint vuln hooks install-tools check
 
 # ── Phase 1: Vault foundation ─────────────────────────────────────────────────
@@ -20,6 +21,12 @@ stop:
 
 status:
 	@$(VAULT) status 2>/dev/null || echo "Vault is not running. Run: make setup"
+
+# ── Phase 6: SPIFFE/SPIRE Vault JWT auth configuration ───────────────────────
+
+setup-phase6:
+	@chmod +x scripts/phase6-spire-setup.sh
+	@./scripts/phase6-spire-setup.sh
 
 # ── Phase 2: cred-rotation-api Vault prerequisites ────────────────────────────
 
@@ -81,6 +88,14 @@ test-integration:
 # Run only auth method integration tests (AppRole + JWT).
 test-integration-auth:
 	@source .vault-env && cd cred-rotation-api && $(GO) test -tags=integration -race -v -run 'TestNew_(AppRole|JWT)' ./vault/...
+
+# SPIFFE/SPIRE end-to-end integration tests.
+# Brings up the full Docker Compose stack (Vault + SPIRE server + OIDC provider +
+# SPIRE agent), configures JWT auth, registers a workload entry, runs TestSPIFFE*,
+# then tears down. Requires Docker with Compose v2.
+test-integration-spire:
+	@chmod +x scripts/integration-test-spire.sh
+	@./scripts/integration-test-spire.sh
 
 # GitHub adapter integration tests — requires GITHUB_ADMIN_PAT env var.
 test-integration-github:

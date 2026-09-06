@@ -1,0 +1,27 @@
+# Builds the vault package integration test binary for SPIRE end-to-end testing.
+# This image is for the integration test harness only — not a production artifact.
+#
+# The test binary runs TestSPIFFE* tests from cred-rotation-api/vault.
+# It requires SPIFFE_ENDPOINT_SOCKET and VAULT_ADDR env vars at runtime.
+
+FROM golang:1.27-alpine AS builder
+WORKDIR /build
+COPY cred-rotation-api/go.mod cred-rotation-api/go.sum ./
+RUN go mod download
+COPY cred-rotation-api/ .
+# Compile the vault package integration test binary.
+RUN go test -tags=integration,spire -c -o /spire-integration-test ./vault/
+
+# Chainguard static: distroless, ca-certs included, nonroot user (UID 65532).
+# No shell, no package manager — minimal attack surface.
+FROM cgr.dev/chainguard/static:latest
+USER nonroot
+
+COPY --from=builder /spire-integration-test /usr/local/bin/spire-integration-test
+
+ENTRYPOINT [ \
+  "/usr/local/bin/spire-integration-test", \
+  "-test.v", \
+  "-test.run", "TestSPIFFE", \
+  "-test.timeout", "60s" \
+]

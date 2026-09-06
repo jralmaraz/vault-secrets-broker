@@ -573,8 +573,92 @@ Only the `client_secret` is Transit-encrypted. The other fields are not sensitiv
 | **2. cred-rotation-api** | ✅ Complete | mTLS Go server, Adapter interface, Auth0 adapter, Transit config loading, per-endpoint cert authz, cert identity audit logging |
 | **3. vault-rest-engine** | ✅ Complete | Generic Vault plugin, config/roles/creds paths, mTLS call to cred-rotation-api, `/run-integration` slash command |
 | **4. vault-auth0-engine** | ✅ Complete | Auth0-native Vault plugin (direct API calls), rotate-root pattern, seal-wrapped storage, Transit encryption layer, integration test CI slash commands |
-| **5. Lease lifecycle + adapters** | 🔄 In progress | `logical.Secret` RenewFunc/RevokeFunc in vault-auth0-engine; Splunk + SonarQube adapters; JWT/OIDC + SPIFFE workload identity replacing AppRole |
+| **5. Lease lifecycle + adapters** | 🔄 In progress | `logical.Secret` RenewFunc/RevokeFunc in vault-auth0-engine; Splunk + GitHub + Datadog adapters complete; SPIFFE workload identity replacing AppRole (PR #35 merged) |
+| **5a. SPIFFE hardening** | ✅ Complete | Socket path validation, trust domain pinning, background token renewal via `StartRenewer`, `phase6-spire-setup.sh` Vault JWT auth config, SPIRE integration test harness |
 | **6. Hardening** | ⏳ Planned | Circuit breaker, rotation failure handling, ML-DSA certs (pending Vault PKI + Go x509 support), demo script, audit log review |
+
+---
+
+## SPIRE End-to-End Integration Test
+
+The SPIRE integration test harness validates the full SPIFFE workload identity path against a real Docker Compose stack — no mocks.
+
+### What it tests
+
+| Test | Verifies |
+|---|---|
+| `TestSPIFFEAuth_FullFlow` | SPIRE workload API → JWT-SVID fetch → Vault JWT auth login → token issued; `StartRenewer` wires cleanly |
+| `TestSPIFFEAuth_WrongTrustDomain` | Trust domain pinning rejects SVIDs from unexpected trust domains before presenting to Vault |
+
+### Stack topology
+
+```
+┌── Docker Compose (docker-compose.spire.yml) ─────────────────────────────────┐
+│                                                                               │
+│  vault-dev           Vault in dev mode        port 18200 (host)              │
+│  spire-server        SPIRE server              port 18081 (host)              │
+│  oidc-provider       SPIRE OIDC provider       http://oidc-provider:8080/keys │
+│  spire-agent         SPIRE agent               unix socket (shared volume)    │
+│  spire-test-runner   Go integration test       profile: test                  │
+│                                                                               │
+│  Auth flow:                                                                   │
+│  test runner → agent socket → JWT-SVID → vault-dev JWT auth                  │
+│  Vault validates JWT-SVID via JWKS from oidc-provider                        │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+### SPIFFE security controls exercised
+
+- **`bound_subject`** on the Vault JWT role — only `spiffe://example.org/cred-rotation-api` can authenticate
+- **`bound_audiences`** — prevents SVIDs from one Vault authenticating to another
+- **Trust domain pinning** — client code rejects SVIDs from unexpected trust domains before presenting to Vault
+- **`unix:uid` workload attestor** — only processes running as UID 1001 receive an SVID
+
+### Running the test
+
+```bash
+# Full end-to-end: brings up the stack, runs tests, tears down.
+make test-integration-spire
+
+# Or directly:
+./scripts/integration-test-spire.sh
+```
+
+**Requirements**: Docker Desktop (Mac/Windows) or Docker Engine (Linux) with Compose v2.
+
+The script automatically:
+1. Starts Vault dev + SPIRE server + OIDC provider + SPIRE agent
+2. Generates a join token and drops it into the shared volume for the agent entrypoint
+3. Registers a workload entry for `unix:uid:1001` → `spiffe://example.org/cred-rotation-api`
+4. Configures Vault JWT auth (pointing `jwks_url` at the in-network OIDC provider)
+5. Builds the test runner image and runs it in the Docker network
+6. Tears down the entire stack (volumes included) on exit
+
+### Vault JWT role (`cred-rotation-api`)
+
+Configured by `scripts/phase6-spire-setup.sh` (production) or the integration test script (test stack):
+
+```bash
+vault write auth/jwt/role/cred-rotation-api \
+  role_type=jwt \
+  bound_audiences="https://<vault-addr>" \
+  bound_subject="spiffe://example.org/cred-rotation-api" \
+  user_claim=sub \
+  token_policies=cred-rotation-api \
+  token_ttl=5m \
+  token_max_ttl=1h
+```
+
+### Runtime env vars for production SPIFFE auth
+
+```bash
+SPIFFE_ENDPOINT_SOCKET=unix:///run/spire/agent.sock  # or tcp://spire-agent:8081
+VAULT_SPIFFE_AUDIENCE=https://vault.example.com
+VAULT_SPIFFE_TRUST_DOMAIN=example.org
+VAULT_JWT_MOUNT=auth/jwt/login
+VAULT_JWT_ROLE=cred-rotation-api
+# Remove VAULT_APPROLE_ROLE_ID, VAULT_APPROLE_SECRET_ID, and VAULT_TOKEN
+```
 
 ---
 
@@ -605,7 +689,7 @@ type Adapter interface {
 | Item | Status | Notes |
 |---|---|---|
 | `vault server -dev` is in-memory | PoC only | Dev mode uses an in-memory storage backend. Restart = all data lost. Switch to Raft file backend for persistence testing. |
-| AppRole `secret_id` via env var | Local dev only | AppRole is the local-dev fallback. CI uses GitHub Actions OIDC; production uses SPIFFE JWT-SVID. See issue #16. |
+| AppRole `secret_id` via env var | Local dev only | AppRole is the local-dev fallback. CI uses GitHub Actions OIDC; production uses SPIFFE JWT-SVID. Socket path validation and trust domain pinning enforced in `vault/client.go`. |
 | `token_bound_cidrs=127.0.0.1/32` | PoC | Restricts AppRole token use to localhost. Not applicable once JWT/OIDC auth is in use (issue #16). |
 | Internal CA is self-signed | PoC | For production, root the internal CA under your enterprise PKI. ML-DSA cert support pending Vault PKI + Go x509 (issue #12). |
 | Plugin binary SHA verification | ✅ Complete | Plugin registration verifies SHA256 hash in the setup script. |
