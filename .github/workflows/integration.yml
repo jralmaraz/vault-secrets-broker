@@ -369,3 +369,87 @@ jobs:
       - name: Fail job if GitHub tests failed
         if: steps.github-tests.outputs.exit_code != '0'
         run: exit 1
+
+  # ── Datadog API/Application key rotation integration tests ────────────────────
+  # Requires DD_ADMIN_API_KEY and DD_ADMIN_APP_KEY secrets with api_keys_write.
+  # Skipped automatically when either secret is absent (forks, Dependabot, etc.).
+  # Creates and deletes real Datadog API keys against the live Datadog API.
+  datadog-adapter:
+    name: Datadog adapter integration
+    runs-on: ubuntu-latest
+    if: secrets.DD_ADMIN_API_KEY != ''
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cred-rotation-api/go.mod
+
+      - name: Run Datadog adapter integration tests
+        id: datadog-tests
+        working-directory: cred-rotation-api
+        env:
+          DD_API_KEY: ${{ secrets.DD_ADMIN_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_ADMIN_APP_KEY }}
+        run: |
+          go test -tags=integration -race -v -timeout 120s \
+            -run TestIntegration \
+            ./adapter/datadog/... 2>&1 | tee /tmp/datadog-test-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Post Datadog test results as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.existsSync('/tmp/datadog-test-output.txt')
+              ? fs.readFileSync('/tmp/datadog-test-output.txt', 'utf8')
+              : '(no output)';
+            const exitCode = '${{ steps.datadog-tests.outputs.exit_code }}';
+            const status = exitCode === '0' ? '✅ PASSED' : '❌ FAILED';
+            const sha = context.sha.slice(0, 7);
+
+            const body = [
+              `## Integration Test Results — Datadog adapter ${status}`,
+              ``,
+              `**Commit**: \`${sha}\`  **Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              ``,
+              `Tests exercise the full Datadog API key lifecycle against the live Datadog v2 API:`,
+              `rotate → status (active) → rotate-with-old-delete → status (old=gone) → revoke → status (gone).`,
+              ``,
+              `<details><summary>Full test output</summary>`,
+              ``,
+              '```',
+              output.slice(0, 60000),
+              '```',
+              `</details>`,
+            ].join('\n');
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments.data) {
+              if (comment.user.type === 'Bot' &&
+                  comment.body.includes('Integration Test Results — Datadog adapter')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail job if Datadog tests failed
+        if: steps.datadog-tests.outputs.exit_code != '0'
+        run: exit 1
