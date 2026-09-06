@@ -1,18 +1,22 @@
 # SPIRE end-to-end integration test stack.
 #
 # Do not use in production — TLS is disabled for test simplicity.
-# The OIDC provider, agent, and test runner communicate over plain HTTP and
-# Unix sockets within this isolated Docker network.
 #
 # Usage: scripts/integration-test-spire.sh
 # Direct Makefile target: make test-integration-spire
 #
 # Services:
-#   vault-dev        — Vault in dev mode (root token: integ-test-token)
-#   spire-server     — SPIRE server (join_token node attestor)
-#   oidc-provider    — SPIRE OIDC discovery provider (serves JWKS for Vault)
-#   spire-agent      — SPIRE agent (unix workload attestor, pid:host)
+#   vault-dev         — Vault in dev mode (root token: integ-test-token)
+#   spire-server      — SPIRE server (join_token node attestor)
+#   oidc-provider     — SPIRE OIDC discovery provider (serves JWKS for Vault)
+#   spire-agent       — SPIRE agent (unix workload attestor, pid:host)
 #   spire-test-runner — Compiled Go integration test binary (profile: test)
+#
+# Notes:
+#   - SPIRE 1.11.x images are distroless (no shell/wget/curl).
+#     Readiness is checked by the setup script via host-exposed ports.
+#   - The SPIRE agent join token is passed via a compose override generated
+#     at runtime by integration-test-spire.sh (see SPIRE_AGENT_JOIN_TOKEN env).
 
 services:
 
@@ -23,9 +27,13 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
       VAULT_LOG_LEVEL: warn
     ports:
-      - "18200:8200"   # avoids colliding with a local Vault dev server on :8200
+      - "18200:8200"
     cap_add:
       - IPC_LOCK
+    volumes:
+      # Pre-create the agent-socket named volume here so it exists before
+      # spire-agent and spire-test-runner try to use it.
+      - agent-socket:/tmp/.spire-pre-create
     healthcheck:
       test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
       interval: 5s
@@ -37,70 +45,56 @@ services:
     volumes:
       - ./spire/server.conf:/etc/spire/server/server.conf:ro
       - spire-server-data:/tmp/spire-server
+    # ENTRYPOINT: ["/opt/spire/bin/spire-server", "run"] — command appends as CMD args.
     command:
-      - /opt/spire/bin/spire-server
-      - run
       - -config
       - /etc/spire/server/server.conf
     ports:
-      - "18081:8081"   # exposed so the setup script can issue join tokens from the host
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      - "18081:8081"   # gRPC API for join token generation from host
+      - "18080:8080"   # HTTP health — polled by script (distroless: no curl inside)
 
   oidc-provider:
     image: ghcr.io/spiffe/oidc-discovery-provider:1.11.1
     depends_on:
-      spire-server:
-        condition: service_healthy
+      - spire-server
     volumes:
       - ./spire/oidc-provider.conf:/etc/spire/oidc-discovery-provider/config.conf:ro
-      - spire-server-data:/tmp/spire-server:ro  # read-only access to server admin socket
+      - spire-server-data:/tmp/spire-server:ro
+    # ENTRYPOINT: ["/opt/spire/bin/oidc-discovery-provider"] — command appends as CMD args.
     command:
-      - /opt/spire/bin/oidc-discovery-provider
       - -config
       - /etc/spire/oidc-discovery-provider/config.conf
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+    ports:
+      - "18083:8080"   # JWKS endpoint — polled by script; Vault fetches via service name internally
 
   spire-agent:
     image: ghcr.io/spiffe/spire-agent:1.11.1
     depends_on:
-      spire-server:
-        condition: service_healthy
-    pid: "host"  # required: unix workload attestor reads /proc to identify callers by UID
+      - spire-server
+    pid: "host"   # required: unix workload attestor reads /proc to identify callers by UID
     volumes:
       - ./spire/agent.conf:/etc/spire/agent/agent.conf:ro
-      - ./spire/agent-entrypoint.sh:/entrypoint.sh:ro
-      - agent-socket:/run/spire          # workload API socket, shared with test runner
-      - join-token-vol:/run/spire-setup  # setup script drops join token here
-    entrypoint: ["/bin/sh", "/entrypoint.sh"]
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 15s
+      - agent-socket:/run/spire   # workload API socket, shared with test runner
+    # ENTRYPOINT: ["/opt/spire/bin/spire-agent", "run"] — command appends as CMD args.
+    # The -joinToken flag is appended at runtime by integration-test-spire.sh via compose override.
+    command:
+      - -config
+      - /etc/spire/agent/agent.conf
+    ports:
+      - "18082:8080"   # agent health — polled by script
 
   spire-test-runner:
     build:
       context: .
       dockerfile: scripts/Dockerfile.spire-test
-    profiles: ["test"]  # only started explicitly by integration-test-spire.sh
+    profiles: ["test"]
     depends_on:
-      spire-agent:
-        condition: service_healthy
-      vault-dev:
-        condition: service_healthy
-    pid: "host"  # unix workload attestor requires same PID namespace as agent
+      - spire-agent
+      - vault-dev
+    pid: "host"   # unix workload attestor requires same PID namespace as agent
     volumes:
-      - agent-socket:/run/spire:ro  # access to workload API socket
-    # Label used as unix:uid selector — test runner Dockerfile sets USER spire-test (UID 1001)
+      - agent-socket:/run/spire:ro
+    # UID 1001 set in Dockerfile — matches the unix:uid workload entry selector.
     environment:
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent.sock
       VAULT_ADDR: http://vault-dev:8200
@@ -110,5 +104,4 @@ services:
 
 volumes:
   spire-server-data:  # shared between spire-server and oidc-provider
-  agent-socket:       # SPIRE workload API socket, shared between agent and test runner
-  join-token-vol:     # setup script writes join token here; agent entrypoint reads it
+  agent-socket:       # SPIRE workload API socket (spire-agent → spire-test-runner)

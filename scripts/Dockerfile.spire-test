@@ -4,7 +4,7 @@
 # The test binary runs TestSPIFFE* tests from cred-rotation-api/vault.
 # It requires SPIFFE_ENDPOINT_SOCKET and VAULT_ADDR env vars at runtime.
 
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 WORKDIR /build
 COPY cred-rotation-api/go.mod cred-rotation-api/go.sum ./
 RUN go mod download
