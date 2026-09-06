@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	fakeAPIKey  = "pagerduty-api-key-aaaa-bbbb-cccc"
-	fakeEmail   = "sre@example.com"
-	fakeKeyID   = "PABC123"
-	fakeKeyVal  = "u+Qh7FkFGE4O3nU5tGv2" // never log this in tests either
+	fakeAPIKey = "pagerduty-api-key-aaaa-bbbb-cccc"
+	fakeEmail  = "sre@example.com"
+	fakeKeyID  = "PABC123"
+	fakeKeyVal = "u+Qh7FkFGE4O3nU5tGv2" // never log this in tests either
 )
 
 // pdCreateResponse builds a minimal PagerDuty create-key response.
