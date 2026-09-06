@@ -181,6 +181,98 @@ func TestRotate_DeletesOldToken(t *testing.T) {
 	}
 }
 
+func TestRotate_NameContainsTimestampAndRandomSuffix(t *testing.T) {
+	var capturedName string
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"/services/data/inputs/http": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				_ = r.ParseForm()
+				capturedName = r.FormValue("name")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write(splunkResp(splunkEntry{
+					Name:    capturedName,
+					Content: splunkContent{Token: fakeToken},
+				}))
+			}
+		},
+	})
+
+	a := newAdapter(t, srv)
+	_, err := a.Rotate(context.Background(), adapter.RotateRequest{ProviderID: "svc"})
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+
+	if !strings.HasPrefix(capturedName, "svc-") {
+		t.Errorf("token name %q should start with provider ID prefix", capturedName)
+	}
+	// Format: svc-<timestamp>-<4hexchars>
+	parts := strings.Split(capturedName, "-")
+	if len(parts) < 3 {
+		t.Errorf("token name %q should have at least 3 dash-separated parts", capturedName)
+	}
+	lastPart := parts[len(parts)-1]
+	if len(lastPart) != 4 {
+		t.Errorf("random suffix %q should be 4 hex characters, got len=%d", lastPart, len(lastPart))
+	}
+}
+
+// TestRotate_LogInjection_TokenNameSanitized verifies that a newline-embedded
+// old_token_name does not produce multi-line log output (CWE-117 guard).
+// A catch-all handler returns 500 for any DELETE so the Warn path is reached.
+func TestRotate_LogInjection_TokenNameSanitized(t *testing.T) {
+	injectedName := "legit-token\nfake-log-entry: injected"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(splunkResp(splunkEntry{
+				Name:    "app-new",
+				Content: splunkContent{Token: fakeToken},
+			}))
+			return
+		}
+		if r.Method == http.MethodDelete {
+			// Force a 500 so the adapter logs the old_token_name via Warn.
+			http.Error(w, `{"messages":[{"type":"ERROR","text":"forced"}]}`,
+				http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	a, err := splunk.New(splunk.Config{
+		BaseURL:   srv.URL,
+		AuthToken: fakeAuthToken,
+	}, splunk.WithBaseURL(srv.URL), splunk.WithLogger(logger))
+	if err != nil {
+		t.Fatalf("splunk.New: %v", err)
+	}
+
+	_, err = a.Rotate(context.Background(), adapter.RotateRequest{
+		ProviderID: "app",
+		Meta:       map[string]string{"old_token_name": injectedName},
+	})
+	if err != nil {
+		t.Fatalf("Rotate should succeed, got: %v", err)
+	}
+
+	logged := logBuf.String()
+	// The injected suffix must NOT appear as a standalone log line.
+	injectedSuffix := strings.Split(injectedName, "\n")[1]
+	if strings.Contains(logged, "\n"+injectedSuffix) {
+		t.Errorf("log injection not sanitized — newline present in output: %q", logged)
+	}
+	// The safe prefix before the newline must still appear.
+	if !strings.Contains(logged, "legit-token") {
+		t.Errorf("expected safe prefix in log, got: %q", logged)
+	}
+}
+
 func TestRotate_APIError(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"/services/data/inputs/http": func(w http.ResponseWriter, _ *http.Request) {
