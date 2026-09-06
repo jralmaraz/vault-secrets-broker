@@ -63,17 +63,17 @@ type Config struct {
 // NewFromEnv builds a Config from the standard environment variables.
 func NewFromEnv() Config {
 	return Config{
-		Address:        envOr("VAULT_ADDR", "http://127.0.0.1:8200"),
-		Token:          os.Getenv("VAULT_TOKEN"),
-		JWTMountPath:   envOr("VAULT_JWT_MOUNT", "auth/jwt/login"),
-		JWTRole:        os.Getenv("VAULT_JWT_ROLE"),
-		JWTToken:       os.Getenv("VAULT_JWT_TOKEN"),
+		Address:           envOr("VAULT_ADDR", "http://127.0.0.1:8200"),
+		Token:             os.Getenv("VAULT_TOKEN"),
+		JWTMountPath:      envOr("VAULT_JWT_MOUNT", "auth/jwt/login"),
+		JWTRole:           os.Getenv("VAULT_JWT_ROLE"),
+		JWTToken:          os.Getenv("VAULT_JWT_TOKEN"),
 		SPIFFESocket:      os.Getenv("SPIFFE_ENDPOINT_SOCKET"),
 		SPIFFEAudience:    os.Getenv("VAULT_SPIFFE_AUDIENCE"),
 		SPIFFETrustDomain: os.Getenv("VAULT_SPIFFE_TRUST_DOMAIN"),
-		RoleID:         os.Getenv("VAULT_APPROLE_ROLE_ID"),
-		SecretID:       os.Getenv("VAULT_APPROLE_SECRET_ID"),
-		CACertPath:     os.Getenv("VAULT_CACERT"),
+		RoleID:            os.Getenv("VAULT_APPROLE_ROLE_ID"),
+		SecretID:          os.Getenv("VAULT_APPROLE_SECRET_ID"),
+		CACertPath:        os.Getenv("VAULT_CACERT"),
 	}
 }
 
