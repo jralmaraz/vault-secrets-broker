@@ -20,11 +20,11 @@ const (
 )
 
 // sqGenerateResponse builds a minimal SonarQube generate response.
-func sqGenerateResponse(name, token string) []byte {
+func sqGenerateResponse(name string) []byte {
 	b, _ := json.Marshal(map[string]interface{}{
 		"login": fakeLogin,
 		"name":  name,
-		"token": token,
+		"token": fakeTokenValue,
 	})
 	return b
 }
@@ -107,7 +107,7 @@ func TestRotate_Success(t *testing.T) {
 			}
 			generateCalled = true
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse("ci-pipeline-ts-ab", fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse("ci-pipeline-ts-ab"))
 		},
 	})
 
@@ -146,7 +146,7 @@ func TestRotate_CredentialIDContainsLoginAndTokenName(t *testing.T) {
 			_ = r.ParseForm()
 			capturedName = r.FormValue("name")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse(capturedName, fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse(capturedName))
 		},
 	})
 
@@ -168,7 +168,7 @@ func TestRotate_TokenNameContainsTimestampAndSuffix(t *testing.T) {
 			_ = r.ParseForm()
 			capturedName = r.FormValue("name")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse(capturedName, fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse(capturedName))
 		},
 	})
 
@@ -196,7 +196,7 @@ func TestRotate_RevokesOldToken(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"/api/user_tokens/generate": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse("new-token", fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse("new-token"))
 		},
 		"/api/user_tokens/revoke": func(w http.ResponseWriter, r *http.Request) {
 			_ = r.ParseForm()
@@ -224,7 +224,7 @@ func TestRotate_OldTokenRevokeFailure_LogsAndSucceeds(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"/api/user_tokens/generate": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse("new-token", fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse("new-token"))
 		},
 		"/api/user_tokens/revoke": func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, `{"errors":[{"msg":"Internal error"}]}`, http.StatusInternalServerError)
@@ -289,7 +289,7 @@ func TestRotate_LogInjection_OldTokenNameSanitized(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"/api/user_tokens/generate": func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse("ts", fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse("ts"))
 		},
 		// 500 forces the Warn log path so we can verify the token name is sanitized.
 		// (404 would be treated as idempotent success and produce no warning.)
@@ -473,7 +473,7 @@ func TestRotate_SendsBasicAuthHeader(t *testing.T) {
 		"/api/user_tokens/generate": func(w http.ResponseWriter, r *http.Request) {
 			gotAuth = r.Header.Get("Authorization")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(sqGenerateResponse("ts", fakeTokenValue))
+			_, _ = w.Write(sqGenerateResponse("ts"))
 		},
 	})
 
