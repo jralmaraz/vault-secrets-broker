@@ -12,14 +12,10 @@ COPY cred-rotation-api/ .
 # Compile the vault package integration test binary.
 RUN go test -tags=integration,spire -c -o /spire-integration-test ./vault/
 
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
-
-# UID 1001 — must match the unix:uid workload entry selector registered in
-# scripts/integration-test-spire.sh. The SPIRE agent attests callers by UID.
-RUN addgroup -g 1001 spire-test && \
-    adduser -D -u 1001 -G spire-test spire-test
-USER spire-test
+# Chainguard static: distroless, ca-certs included, nonroot user (UID 65532).
+# No shell, no package manager — minimal attack surface.
+FROM cgr.dev/chainguard/static:latest
+USER nonroot
 
 COPY --from=builder /spire-integration-test /usr/local/bin/spire-integration-test
 

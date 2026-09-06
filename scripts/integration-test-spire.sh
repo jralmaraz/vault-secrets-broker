@@ -33,7 +33,7 @@ VAULT_ADDR_HOST="http://127.0.0.1:${VAULT_PORT}"
 
 TRUST_DOMAIN="example.org"
 SPIFFE_ID="spiffe://${TRUST_DOMAIN}/cred-rotation-api"
-WORKLOAD_UID=1001   # must match Dockerfile.spire-test adduser UID
+WORKLOAD_UID=65532  # cgr.dev/chainguard/static nonroot user UID
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}✓${NC} $*"; }

@@ -94,7 +94,7 @@ services:
     pid: "host"   # unix workload attestor requires same PID namespace as agent
     volumes:
       - agent-socket:/run/spire:ro
-    # UID 1001 set in Dockerfile — matches the unix:uid workload entry selector.
+    # UID 65532 — Chainguard static nonroot user; matches the unix:uid workload entry selector.
     environment:
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent.sock
       VAULT_ADDR: http://vault-dev:8200
