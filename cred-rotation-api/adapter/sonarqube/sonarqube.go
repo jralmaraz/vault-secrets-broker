@@ -8,8 +8,8 @@
 // CredentialID convention: "<login>:<tokenname>" — composite so that Revoke and Status
 // can resolve both fields from a single string without a separate parameter.
 //
-// Auth: HTTP Basic with the admin token as the username and an empty password, per the
-// SonarQube Web API convention for token-based authentication.
+// Auth: Bearer token (Authorization: Bearer <token>), supported from SonarQube 10.0+.
+// The pre-10 Basic-auth-with-token scheme is intentionally not used.
 //
 // TLS: enforces TLS 1.3 minimum on all outbound requests.
 package sonarqube
@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -268,9 +267,9 @@ func (a *Adapter) do(ctx context.Context, method, endpoint string, reqBody io.Re
 	if err != nil {
 		return 0, nil, fmt.Errorf("build request: %w", err)
 	}
-	// SonarQube Basic auth: adminToken as username, empty password.
-	creds := base64.StdEncoding.EncodeToString([]byte(a.adminToken + ":"))
-	req.Header.Set("Authorization", "Basic "+creds)
+	// SonarQube 10+ Bearer token auth — semantically correct for API tokens
+	// and avoids the Basic auth scheme (which SonarQube < 10 required).
+	req.Header.Set("Authorization", "Bearer "+a.adminToken)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

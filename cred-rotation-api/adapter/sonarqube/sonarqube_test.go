@@ -467,7 +467,7 @@ func TestStatus_APIError(t *testing.T) {
 
 // ── Auth header guard ─────────────────────────────────────────────────────────
 
-func TestRotate_SendsBasicAuthHeader(t *testing.T) {
+func TestRotate_SendsBearerAuthHeader(t *testing.T) {
 	var gotAuth string
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"/api/user_tokens/generate": func(w http.ResponseWriter, r *http.Request) {
@@ -480,7 +480,7 @@ func TestRotate_SendsBasicAuthHeader(t *testing.T) {
 	a := newAdapter(t, srv)
 	_, _ = a.Rotate(context.Background(), adapter.RotateRequest{ProviderID: fakeLogin})
 
-	if !strings.HasPrefix(gotAuth, "Basic ") {
-		t.Errorf("Authorization header = %q, want Basic scheme", gotAuth)
+	if !strings.HasPrefix(gotAuth, "Bearer ") {
+		t.Errorf("Authorization header = %q, want Bearer scheme", gotAuth)
 	}
 }
