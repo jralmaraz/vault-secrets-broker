@@ -19,8 +19,10 @@ package splunk
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,7 +132,11 @@ func (a *Adapter) Name() string { return adapterName }
 // The new token value is only returned once by Splunk; it is Transit-encrypted
 // by the server layer before being sent to callers.
 func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapter.Result, error) {
-	newName := req.ProviderID + "-" + time.Now().UTC().Format(tokenTimeFmt)
+	suffix, err := randomHex(2) // 4 hex chars — prevents name collision under concurrent same-providerID rotation (issue #31)
+	if err != nil {
+		return adapter.Result{}, fmt.Errorf("splunk rotate: generate name suffix: %w", err)
+	}
+	newName := req.ProviderID + "-" + time.Now().UTC().Format(tokenTimeFmt) + "-" + suffix
 
 	tokenValue, err := a.createToken(ctx, newName, req.Meta)
 	if err != nil {
@@ -150,9 +156,9 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		defer cancel()
 		if err := a.deleteToken(deleteCtx, old); err != nil {
 			a.logger.Warn("splunk: best-effort delete of old token failed",
-				"old_token", old,
-				"provider_id", req.ProviderID,
-				"err", err,
+				"old_token", sanitizeForLog(old),
+				"provider_id", sanitizeForLog(req.ProviderID),
+				"err", sanitizeForLog(err.Error()),
 			)
 		}
 	}
@@ -288,6 +294,38 @@ func (a *Adapter) do(ctx context.Context, method, endpoint string, reqBody io.Re
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, bodyLimit))
 	return resp.StatusCode, body, nil
+}
+
+// randomHex returns n random bytes encoded as a 2n-character hex string.
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// sanitizeForLog strips ASCII control characters (including CR/LF) from s and
+// truncates to 256 runes. This prevents log-injection attacks when user-supplied
+// values such as provider IDs, token names, or server error messages are written
+// to structured log entries. Normal values (token names, provider IDs) are unaffected.
+func sanitizeForLog(s string) string {
+	const maxRunes = 256
+	var b strings.Builder
+	b.Grow(len(s))
+	n := 0
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+		n++
+		if n >= maxRunes {
+			b.WriteString("…")
+			break
+		}
+	}
+	return b.String()
 }
 
 // splunkResponse is the JSON envelope returned by all Splunk REST management endpoints.
