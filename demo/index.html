@@ -255,9 +255,10 @@ footer a { color: var(--purple); text-decoration: none; }
     <span class="hl">Not Just Storage</span>
   </h1>
   <p class="hero-sub">
-    A production-grade accelerator that enables Vault to rotate API credentials for SaaS providers
-    in real time — calling their APIs, revoking old credentials on expiry, and protecting
-    credential values with Transit envelope encryption, mTLS, and SPIFFE workload identity.
+    Vault ships native secrets engines for AWS, Azure, GCP, databases, PKI, SSH, and more.
+    vault·secrets·broker fills the gap for every platform that doesn't have one —
+    automating credential rotation by calling the platform's API directly,
+    protected by Transit envelope encryption, mTLS, and SPIFFE workload identity.
     Six adapters. Zero static secrets.
   </p>
   <div class="hero-cta">
@@ -269,7 +270,7 @@ footer a { color: var(--purple); text-decoration: none; }
 
 <!-- ── Problem strip ── -->
 <div class="problem-strip">
-  <strong>The KV misconception:</strong> Vault's KV engine stores secrets. It does not know how to call Auth0, Splunk, or SonarQube. When a KV-stored credential expires in Vault, <strong>the actual credential on the SaaS side remains valid indefinitely.</strong> A custom secrets engine changes this.
+  <strong>The KV misconception:</strong> Vault ships native secrets engines for cloud providers, databases, PKI, and SSH. For any platform with no native engine, KV is the common fallback — but KV only stores secrets. It does not call any external API. When a KV-stored credential expires in Vault, <strong>the actual credential on the platform side remains valid indefinitely.</strong> A custom secrets engine changes this.
 </div>
 
 <!-- ── Main ── -->
@@ -284,14 +285,14 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="compare-item"><span class="ic">✅</span> Stores the credential securely</div>
         <div class="compare-item"><span class="ic">✅</span> Audits every read/write</div>
         <div class="compare-item"><span class="ic">✅</span> Enforces TTL on Vault's copy</div>
-        <div class="compare-item"><span class="ic">❌</span> Does NOT call Auth0/Splunk/any API</div>
+        <div class="compare-item"><span class="ic">❌</span> Does NOT call the platform's API to rotate anything</div>
         <div class="compare-item"><span class="ic">❌</span> Old credential stays valid on the SaaS side</div>
         <div class="compare-item"><span class="ic">❌</span> No revocation on lease expiry</div>
         <div class="compare-item"><span class="ic">❌</span> Leaked credential remains usable indefinitely</div>
       </div>
       <div class="compare-card good">
-        <div class="compare-label">Dynamic Secrets Engine (this accelerator) ✓</div>
-        <div class="compare-item"><span class="ic">✅</span> Calls the target API to create a new credential</div>
+        <div class="compare-label">Dynamic Secrets Engine — the gap-filler ✓</div>
+        <div class="compare-item"><span class="ic">✅</span> Calls the platform's API to create a new credential</div>
         <div class="compare-item"><span class="ic">✅</span> Returns short-lived dynamic credential with TTL</div>
         <div class="compare-item"><span class="ic">✅</span> On lease expiry: calls API to revoke the credential</div>
         <div class="compare-item"><span class="ic">✅</span> Credential lifetime fully managed end-to-end</div>
@@ -384,7 +385,7 @@ footer a { color: var(--purple); text-decoration: none; }
         <code>POST /v1/credentials/rotate</code>
         <code>{ provider, resource_id, lease_id }</code>
         <code>→ { encrypted_value, expires_at }</code>
-        <p>Any SaaS adapter implements this contract. Vault doesn't know if it's Auth0, Splunk, or SonarQube.</p>
+        <p>Any adapter implements this contract. Vault doesn't know — or care — which platform is behind it.</p>
       </div>
     </div>
   </section>
@@ -418,7 +419,7 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="sec-dot" style="background:var(--cyan)"></div>
         <div>
           <strong>Layer 4 — Transit Envelope Encryption (adapter config at rest)</strong>
-          <p>SaaS adapter credentials (Auth0 mgmt secret, Splunk token) stored in KV encrypted via Transit. The KV backend at rest cannot be read without the Transit master key. Plaintext credentials never touch Vault storage.</p>
+          <p>Each adapter's admin credentials (API keys, management tokens) stored in KV encrypted via Transit. The KV backend at rest cannot be read without the Transit master key. Plaintext credentials never touch Vault storage.</p>
         </div>
       </div>
       <div class="sec-layer">
@@ -456,23 +457,23 @@ footer a { color: var(--purple); text-decoration: none; }
     participant Plugin as vault-rest-engine
     participant Transit as Transit Engine
     participant API as cred-rotation-api
-    participant Auth0 as Auth0 Mgmt API
+    participant Provider as SaaS Platform API
 
     App->>Vault: vault read generic/creds/my-role (TLS)
     Vault->>Plugin: dispatch to plugin process (gRPC + mTLS)
     Plugin->>API: POST /v1/credentials/rotate (mTLS + client cert)
-    API->>Auth0: POST /api/v2/clients/{id}/rotate-secret (TLS)
-    Auth0-->>API: new_client_secret (plaintext, in TLS channel)
+    API->>Provider: rotate credential via platform API (TLS 1.3)
+    Provider-->>API: new_credential (plaintext, within TLS channel)
     API->>Transit: POST /v1/transit/encrypt/cred-rotation-key
     Note over API,Transit: Envelope encryption — unique DEK per call
     Transit-->>API: vault:v1:AbC123... (ciphertext)
     API-->>Plugin: { encrypted_value: "vault:v1:AbC123..." } (mTLS)
     Note over API,Plugin: plaintext never leaves API unencrypted
     Plugin->>Transit: POST /v1/transit/decrypt/cred-rotation-key
-    Transit-->>Plugin: plaintext new_secret (in plugin memory only)
+    Transit-->>Plugin: plaintext credential (in plugin memory only)
     Plugin-->>Vault: { secret_value, lease_id, ttl: 86400 }
     Vault-->>App: secret (TLS)</pre>
-      <div class="diagram-caption">On Vault lease expiry, the plugin calls <code>POST /v1/credentials/revoke</code> — Auth0 immediately invalidates the old credential.</div>
+      <div class="diagram-caption">On Vault lease expiry, the plugin calls <code>POST /v1/credentials/revoke</code> — the platform immediately invalidates the old credential. No long-lived credential window exists.</div>
     </div>
   </section>
 
@@ -517,7 +518,7 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 1 — Vault Foundation</div>
-          <div class="phase-desc">Vault dev server, PKI engine (internal CA), Transit engine (cred-rotation-key, aes256-gcm96), KV v2 with Transit-encrypted Auth0 adapter config, AppRole auth, least-privilege policies.</div>
+          <div class="phase-desc">Vault dev server, PKI engine (internal CA), Transit engine (cred-rotation-key, aes256-gcm96), KV v2 with Transit-encrypted adapter config, AppRole auth, least-privilege policies.</div>
           <div class="phase-tags">
             <span class="tag">vault server -dev</span>
             <span class="tag">PKI · Transit · AppRole · KV v2</span>
@@ -529,11 +530,11 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 2 — Credential Rotation API</div>
-          <div class="phase-desc">Go mTLS server with client certificate validation, Adapter interface, Auth0 adapter (POST /api/v2/clients/{id}/rotate-secret), Transit-encrypted config loading at startup.</div>
+          <div class="phase-desc">Go mTLS server with client certificate validation, Adapter interface (Rotate / Revoke / Status), first reference adapter for a platform without a native Vault secrets engine, Transit-encrypted config loading at startup.</div>
           <div class="phase-tags">
             <span class="tag">cred-rotation-api</span>
             <span class="tag">mTLS server</span>
-            <span class="tag">Auth0 adapter</span>
+            <span class="tag">reference adapter</span>
             <span class="tag">Transit decrypt on boot</span>
           </div>
         </div>
@@ -553,12 +554,12 @@ footer a { color: var(--purple); text-decoration: none; }
       <div class="phase-item">
         <div class="phase-num p-done">✓</div>
         <div>
-          <div class="phase-title">Phase 4 — Auth0-native Secrets Engine</div>
-          <div class="phase-desc">vault-auth0-engine plugin: same SDK structure but calls Auth0 Management API directly (no intermediate API hop). Demonstrates the trade-off between the generic REST engine and provider-specific plugins.</div>
+          <div class="phase-title">Phase 4 — Custom Native Secrets Engine</div>
+          <div class="phase-desc">vault-auth0-engine: a provider-specific plugin calling the platform API directly — no intermediate rotation service. Built to objectively compare the trade-offs against the generic REST engine. <a href="compare.html" style="color:var(--purple)">See the comparison →</a></div>
           <div class="phase-tags">
             <span class="tag">vault-auth0-engine</span>
-            <span class="tag">Auth0 Mgmt API direct</span>
-            <span class="tag">comparison study</span>
+            <span class="tag">native plugin</span>
+            <span class="tag">vs generic REST engine</span>
           </div>
         </div>
       </div>
@@ -566,7 +567,7 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 5 — Multi-Provider Adapter Suite</div>
-          <div class="phase-desc">Six adapters shipped: Auth0, Splunk, SonarQube (Bearer token, SQ 10.0+), GitHub (fine-grained tokens), Datadog (API keys), PagerDuty (API keys). Zero changes to Vault plugins — the core demonstration of the abstraction layer value.</div>
+          <div class="phase-desc">Six adapters for platforms with no native Vault secrets engine — proving the abstraction layer: each new platform requires only a new adapter, zero plugin changes. Examples include SIEM platforms, identity providers, observability tools, and incident management.</div>
           <div class="phase-tags">
             <span class="tag">Auth0</span>
             <span class="tag">Splunk</span>
@@ -601,14 +602,14 @@ footer a { color: var(--purple); text-decoration: none; }
       <span class="ic">⚠️</span>
       <div>
         <strong>Prerequisites:</strong>
-        <p>Go 1.27+, Vault 1.18+ (<code style="font-family:var(--mono);font-size:11px">brew install hashicorp/tap/vault</code>), Docker (for SPIRE integration tests), an Auth0 dev tenant with a Management API M2M application.</p>
+        <p>Go 1.27+, Vault 1.18+ (<code style="font-family:var(--mono);font-size:11px">brew install hashicorp/tap/vault</code>), Docker (for SPIRE integration tests), and credentials for the target platform (admin API key or management token).</p>
       </div>
     </div>
 <pre class="code-block"><span class="cm"># Clone and configure</span>
 git clone https://github.com/jralmaraz/vault-secrets-broker.git
 cd vault-secrets-broker
 cp .env.example .env
-<span class="cm"># edit .env with your Auth0 tenant credentials</span>
+<span class="cm"># edit .env with your platform admin credentials</span>
 
 <span class="cm"># Run Phase 1 — starts Vault and configures all engines</span>
 make setup
@@ -616,12 +617,12 @@ make setup
 <span class="cm"># Load the Vault environment</span>
 source .vault-env
 
-<span class="cm"># Verify the Auth0 client_secret is Transit-encrypted (not plaintext)</span>
+<span class="cm"># Verify the platform admin credential is Transit-encrypted (not plaintext)</span>
 vault kv get secret/cred-rotation-api/adapters/auth0
-<span class="cm"># mgmt_client_secret_encrypted = vault:v1:...  ← ciphertext ✓</span>
+<span class="cm"># admin_token_encrypted = vault:v1:...  ← ciphertext ✓</span>
 
 <span class="cm"># Verify Transit decrypt round-trip</span>
-CIPHER=$(vault kv get -field=mgmt_client_secret_encrypted \
+CIPHER=$(vault kv get -field=admin_token_encrypted \
   secret/cred-rotation-api/adapters/auth0)
 vault write -field=plaintext transit/decrypt/cred-rotation-key \
   ciphertext="$CIPHER" | base64 -d
