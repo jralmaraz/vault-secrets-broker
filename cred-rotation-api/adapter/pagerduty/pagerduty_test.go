@@ -21,10 +21,10 @@ const (
 )
 
 // pdCreateResponse builds a minimal PagerDuty create-key response.
-func pdCreateResponse(id, name, key string) []byte {
+func pdCreateResponse(name, key string) []byte {
 	b, _ := json.Marshal(map[string]interface{}{
 		"api_key": map[string]interface{}{
-			"id":   id,
+			"id":   fakeKeyID,
 			"name": name,
 			"key":  key,
 			"type": "read_write_api_key",
@@ -111,7 +111,7 @@ func TestRotate_Success(t *testing.T) {
 			}
 			createCalled = true
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write(pdCreateResponse(fakeKeyID, "infra-auto-ts", fakeKeyVal))
+			_, _ = w.Write(pdCreateResponse("infra-auto-ts", fakeKeyVal))
 		},
 	})
 
@@ -153,7 +153,7 @@ func TestRotate_NameContainsProviderIDAndSuffix(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				capturedName = body.APIKey.Name
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(pdCreateResponse(fakeKeyID, capturedName, fakeKeyVal))
+				_, _ = w.Write(pdCreateResponse(capturedName, fakeKeyVal))
 			}
 		},
 	})
@@ -182,7 +182,7 @@ func TestRotate_DeletesOldKey(t *testing.T) {
 		"/api_keys": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(pdCreateResponse(fakeKeyID, "ts", fakeKeyVal))
+				_, _ = w.Write(pdCreateResponse("ts", fakeKeyVal))
 			}
 		},
 		"/api_keys/OLD123": func(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +211,7 @@ func TestRotate_OldKeyDeleteFailure_LogsAndSucceeds(t *testing.T) {
 		"/api_keys": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(pdCreateResponse(fakeKeyID, "ts", fakeKeyVal))
+				_, _ = w.Write(pdCreateResponse("ts", fakeKeyVal))
 			}
 		},
 		"/api_keys/BAD-OLD": func(w http.ResponseWriter, _ *http.Request) {
@@ -275,7 +275,7 @@ func TestRotate_LogInjection_OldKeyIDSanitized(t *testing.T) {
 		"/api_keys": func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(pdCreateResponse(fakeKeyID, "ts", fakeKeyVal))
+				_, _ = w.Write(pdCreateResponse("ts", fakeKeyVal))
 			}
 		},
 		// No delete handler — will fail, triggering the Warn log path.
@@ -444,7 +444,7 @@ func TestRotate_SendsAuthAndFromHeaders(t *testing.T) {
 				gotAuth = r.Header.Get("Authorization")
 				gotFrom = r.Header.Get("From")
 				w.WriteHeader(http.StatusCreated)
-				_, _ = w.Write(pdCreateResponse(fakeKeyID, "ts", fakeKeyVal))
+				_, _ = w.Write(pdCreateResponse("ts", fakeKeyVal))
 			}
 		},
 	})
