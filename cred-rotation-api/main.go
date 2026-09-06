@@ -44,6 +44,13 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("authenticated to Vault", "addr", cfg.Address)
 
+	// If SPIFFE auth is active, start the background token renewer so the Vault
+	// token stays fresh for the lifetime of the process.
+	vc.StartRenewer(ctx, func(err error) {
+		logger.Error("SPIFFE token renewal failed — initiating shutdown", "err", err)
+		stop()
+	})
+
 	transitKeyName := envOr("VAULT_TRANSIT_KEY", "cred-rotation-key")
 
 	// ── Load adapter configs from KV v2, decrypt secrets with Transit ─────────

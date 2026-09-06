@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/spiffe/go-spiffe/v2/svid/jwtsvid"
@@ -20,7 +22,8 @@ import (
 
 // Client wraps the Vault API client and exposes only the operations used by cred-rotation-api.
 type Client struct {
-	vc *vaultapi.Client
+	vc      *vaultapi.Client
+	authCfg Config // stored for SPIFFE token renewal
 }
 
 // Config holds the parameters needed to authenticate and connect to Vault.
@@ -44,8 +47,9 @@ type Config struct {
 	// and presented to Vault JWT auth. Takes priority over JWTToken.
 	// Format: "unix:///run/spire/agent.sock" or "tcp://spire-agent:8081".
 	// If empty, falls back to VAULT_JWT_TOKEN, then AppRole.
-	SPIFFESocket   string
-	SPIFFEAudience string // Vault audience claim for the JWT-SVID (required when SPIFFESocket is set)
+	SPIFFESocket      string
+	SPIFFEAudience    string // Vault audience claim for the JWT-SVID (required when SPIFFESocket is set)
+	SPIFFETrustDomain string // Expected SPIFFE trust domain (e.g. "example.org"). Rejects SVIDs from other domains.
 
 	// AppRole credentials. Local-dev fallback when no other auth method is configured.
 	RoleID   string
@@ -59,16 +63,17 @@ type Config struct {
 // NewFromEnv builds a Config from the standard environment variables.
 func NewFromEnv() Config {
 	return Config{
-		Address:        envOr("VAULT_ADDR", "http://127.0.0.1:8200"),
-		Token:          os.Getenv("VAULT_TOKEN"),
-		JWTMountPath:   envOr("VAULT_JWT_MOUNT", "auth/jwt/login"),
-		JWTRole:        os.Getenv("VAULT_JWT_ROLE"),
-		JWTToken:       os.Getenv("VAULT_JWT_TOKEN"),
-		SPIFFESocket:   os.Getenv("SPIFFE_ENDPOINT_SOCKET"),
-		SPIFFEAudience: os.Getenv("VAULT_SPIFFE_AUDIENCE"),
-		RoleID:         os.Getenv("VAULT_APPROLE_ROLE_ID"),
-		SecretID:       os.Getenv("VAULT_APPROLE_SECRET_ID"),
-		CACertPath:     os.Getenv("VAULT_CACERT"),
+		Address:           envOr("VAULT_ADDR", "http://127.0.0.1:8200"),
+		Token:             os.Getenv("VAULT_TOKEN"),
+		JWTMountPath:      envOr("VAULT_JWT_MOUNT", "auth/jwt/login"),
+		JWTRole:           os.Getenv("VAULT_JWT_ROLE"),
+		JWTToken:          os.Getenv("VAULT_JWT_TOKEN"),
+		SPIFFESocket:      os.Getenv("SPIFFE_ENDPOINT_SOCKET"),
+		SPIFFEAudience:    os.Getenv("VAULT_SPIFFE_AUDIENCE"),
+		SPIFFETrustDomain: os.Getenv("VAULT_SPIFFE_TRUST_DOMAIN"),
+		RoleID:            os.Getenv("VAULT_APPROLE_ROLE_ID"),
+		SecretID:          os.Getenv("VAULT_APPROLE_SECRET_ID"),
+		CACertPath:        os.Getenv("VAULT_CACERT"),
 	}
 }
 
@@ -93,7 +98,10 @@ func New(cfg Config) (*Client, error) {
 		vc.SetToken(cfg.Token)
 
 	case cfg.SPIFFESocket != "":
-		jwt, err := fetchSPIFFEJWT(context.Background(), cfg.SPIFFESocket, cfg.SPIFFEAudience)
+		if err := validateSPIFFESocket(cfg.SPIFFESocket); err != nil {
+			return nil, err
+		}
+		jwt, err := fetchSPIFFEJWT(context.Background(), cfg.SPIFFESocket, cfg.SPIFFEAudience, cfg.SPIFFETrustDomain)
 		if err != nil {
 			return nil, fmt.Errorf("vault: SPIFFE JWT-SVID: %w", err)
 		}
@@ -123,7 +131,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("vault: must supply VAULT_TOKEN, SPIFFE_ENDPOINT_SOCKET, VAULT_JWT_TOKEN, or VAULT_APPROLE_ROLE_ID+VAULT_APPROLE_SECRET_ID")
 	}
 
-	return &Client{vc: vc}, nil
+	return &Client{vc: vc, authCfg: cfg}, nil
 }
 
 // loginJWT authenticates to Vault via the JWT auth method and sets the client token.
@@ -145,7 +153,8 @@ func loginJWT(vc *vaultapi.Client, mountPath, role, jwt string) error {
 
 // fetchSPIFFEJWT retrieves a JWT-SVID from the SPIFFE workload API.
 // The returned string is the raw JWT (three base64url-encoded parts separated by dots).
-func fetchSPIFFEJWT(ctx context.Context, socketAddr, audience string) (string, error) {
+// If trustDomain is non-empty, the SVID's trust domain must match or the function returns an error.
+func fetchSPIFFEJWT(ctx context.Context, socketAddr, audience, trustDomain string) (string, error) {
 	if audience == "" {
 		return "", errors.New("SPIFFE: audience is required for JWT-SVID fetch (set VAULT_SPIFFE_AUDIENCE)")
 	}
@@ -162,7 +171,110 @@ func fetchSPIFFEJWT(ctx context.Context, socketAddr, audience string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("SPIFFE: fetch JWT-SVID (audience=%s): %w", audience, err)
 	}
+
+	// Trust domain pinning: reject SVIDs issued by an unexpected trust domain.
+	// Without this, a compromised SPIRE agent can issue SVIDs for any trust domain.
+	if trustDomain != "" {
+		got := svid.ID.TrustDomain().String()
+		if got != trustDomain {
+			return "", fmt.Errorf("SPIFFE: SVID trust domain %q does not match expected %q — rejecting", got, trustDomain)
+		}
+	}
+
 	return svid.Marshal(), nil
+}
+
+// validateSPIFFESocket checks that addr uses an accepted scheme and contains no
+// path traversal sequences. Accepted schemes: "unix://" and "tcp://".
+func validateSPIFFESocket(addr string) error {
+	const maxLen = 512
+	if len(addr) > maxLen {
+		return fmt.Errorf("SPIFFE: socket address too long (max %d chars)", maxLen)
+	}
+	switch {
+	case strings.HasPrefix(addr, "unix://"):
+		path := strings.TrimPrefix(addr, "unix://")
+		if strings.Contains(path, "..") {
+			return fmt.Errorf("SPIFFE: socket path must not contain path traversal: %q", addr)
+		}
+		return nil
+	case strings.HasPrefix(addr, "tcp://"):
+		return nil
+	default:
+		return fmt.Errorf("SPIFFE: socket address must use unix:// or tcp:// scheme, got %q", addr)
+	}
+}
+
+// StartRenewer launches a background goroutine that periodically re-authenticates
+// to Vault using a fresh JWT-SVID from the SPIRE workload API. This keeps the Vault
+// token alive for the lifetime of ctx — necessary because JWT-auth tokens are not
+// renewable and JWT-SVIDs have a short TTL (typically 5 minutes in SPIRE).
+//
+// onError is called when re-authentication fails; callers should trigger a graceful
+// shutdown from that callback. StartRenewer is a no-op when SPIFFE auth is not configured.
+func (c *Client) StartRenewer(ctx context.Context, onError func(error)) {
+	if c.authCfg.SPIFFESocket == "" {
+		return
+	}
+	go c.spiffeRenewer(ctx, onError)
+}
+
+// spiffeRenewer re-auths to Vault at 70% of the current token TTL.
+// It falls back to a 4-minute interval if the TTL cannot be determined (aligns
+// with the typical 5-minute SPIRE JWT-SVID TTL and leaves a 1-minute safety window).
+func (c *Client) spiffeRenewer(ctx context.Context, onError func(error)) {
+	const (
+		fallbackInterval = 4 * time.Minute
+		renewFraction    = 0.70
+	)
+
+	for {
+		interval := fallbackInterval
+		if ttl, err := c.tokenTTL(ctx); err == nil && ttl > 0 {
+			interval = time.Duration(float64(ttl) * renewFraction)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+
+		jwt, err := fetchSPIFFEJWT(ctx, c.authCfg.SPIFFESocket, c.authCfg.SPIFFEAudience, c.authCfg.SPIFFETrustDomain)
+		if err != nil {
+			onError(fmt.Errorf("SPIFFE renewer: fetch JWT-SVID: %w", err))
+			return
+		}
+		if err := loginJWT(c.vc, c.authCfg.JWTMountPath, c.authCfg.JWTRole, jwt); err != nil {
+			onError(fmt.Errorf("SPIFFE renewer: re-auth to Vault: %w", err))
+			return
+		}
+	}
+}
+
+// tokenTTL looks up the current client token's remaining TTL from Vault.
+func (c *Client) tokenTTL(ctx context.Context) (time.Duration, error) {
+	secret, err := c.vc.Auth().Token().LookupSelfWithContext(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("token lookup-self: %w", err)
+	}
+	if secret == nil {
+		return 0, errors.New("token lookup-self: empty response")
+	}
+	raw, ok := secret.Data["ttl"]
+	if !ok {
+		return 0, errors.New("token lookup-self: ttl field missing")
+	}
+	var ttlSec int64
+	switch v := raw.(type) {
+	case json.Number:
+		ttlSec, _ = v.Int64()
+	case float64:
+		ttlSec = int64(v)
+	default:
+		return 0, fmt.Errorf("token lookup-self: ttl has unexpected type %T", raw)
+	}
+	return time.Duration(ttlSec) * time.Second, nil
 }
 
 // TransitEncrypt encrypts plaintext (raw bytes) using the named Transit key.
