@@ -31,7 +31,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 )
@@ -42,6 +45,7 @@ const (
 	bodyLimit        = 1 << 20 // 1 MiB
 	tokenTimeFmt     = "20060102T150405.000Z"
 	deleteOldTimeout = 10 * time.Second
+	defaultSemLimit  = 10
 )
 
 // Adapter rotates Splunk HEC tokens via the Splunk REST management API.
@@ -50,6 +54,9 @@ type Adapter struct {
 	authToken  string // Splunk management token
 	httpClient *http.Client
 	logger     *slog.Logger
+
+	sem       *semaphore.Weighted
+	cleanupWg sync.WaitGroup
 
 	// Defaults applied when creating new HEC tokens.
 	defaultIndex      string
@@ -104,14 +111,22 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 		tlsCfg.RootCAs = pool
 	}
 
+	tlsCfg.MaxVersion = 0 // allow TLS 1.3 if both sides support it
+
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	transport.MaxConnsPerHost = defaultSemLimit
+	transport.MaxIdleConnsPerHost = defaultSemLimit
+	transport.MaxIdleConns = defaultSemLimit * 2
+
 	a := &Adapter{
 		baseURL:   strings.TrimRight(cfg.BaseURL, "/"),
 		authToken: cfg.AuthToken,
 		httpClient: &http.Client{
 			Timeout:   httpTimeout,
-			Transport: &http.Transport{TLSClientConfig: tlsCfg},
+			Transport: transport,
 		},
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sem:               semaphore.NewWeighted(defaultSemLimit),
 		defaultIndex:      cfg.DefaultIndex,
 		defaultSourcetype: cfg.DefaultSourcetype,
 	}
@@ -132,6 +147,11 @@ func (a *Adapter) Name() string { return adapterName }
 // The new token value is only returned once by Splunk; it is Transit-encrypted
 // by the server layer before being sent to callers.
 func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapter.Result, error) {
+	if err := a.sem.Acquire(ctx, 1); err != nil {
+		return adapter.Result{}, fmt.Errorf("splunk rotate: acquire slot: %w", err)
+	}
+	defer a.sem.Release(1)
+
 	suffix, err := randomHex(2) // 4 hex chars — prevents name collision under concurrent same-providerID rotation (issue #31)
 	if err != nil {
 		return adapter.Result{}, fmt.Errorf("splunk rotate: generate name suffix: %w", err)
@@ -143,24 +163,28 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		return adapter.Result{}, fmt.Errorf("splunk rotate: %w", err)
 	}
 
-	// Best-effort deletion of the old token. The new credential is already live
-	// so we do NOT fail the rotation if this step errors — callers should use
-	// Revoke explicitly if they need a hard guarantee.
-	//
-	// Intentionally detached from the caller's context: if the handler deadline
-	// has already fired (or fires during the delete), the caller's ctx is
-	// cancelled and the delete would silently no-op, leaving the old token alive
-	// with no trace. An independent timeout gives this cleanup its own budget.
+	// Best-effort deletion of the old token. Runs in a goroutine so it cannot
+	// block the rotation response. Drain() waits for it on graceful shutdown.
 	if old, ok := req.Meta["old_token_name"]; ok && old != "" {
-		deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
-		defer cancel()
-		if err := a.deleteToken(deleteCtx, old); err != nil {
-			a.logger.Warn("splunk: best-effort delete of old token failed",
-				"old_token", sanitizeForLog(old),
-				"provider_id", sanitizeForLog(req.ProviderID),
-				"err", sanitizeForLog(err.Error()),
-			)
-		}
+		providerID := req.ProviderID
+		a.cleanupWg.Add(1)
+		go func() {
+			defer a.cleanupWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					a.logger.Error("splunk: cleanup goroutine panic", "panic", fmt.Sprint(r))
+				}
+			}()
+			deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
+			defer cancel()
+			if err := a.deleteToken(deleteCtx, old); err != nil {
+				a.logger.Warn("splunk: best-effort delete of old token failed",
+					"old_token", sanitizeForLog(old),
+					"provider_id", sanitizeForLog(providerID),
+					"err", sanitizeForLog(err.Error()),
+				)
+			}
+		}()
 	}
 
 	return adapter.Result{
@@ -169,6 +193,21 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		Credential:   tokenValue,
 		RotatedAt:    time.Now().UTC(),
 	}, nil
+}
+
+// Drain waits for all in-flight cleanup goroutines to finish or ctx to expire.
+func (a *Adapter) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		a.cleanupWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Revoke deletes the named HEC token. Fails closed if credential_id is empty.

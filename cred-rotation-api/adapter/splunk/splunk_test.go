@@ -176,6 +176,7 @@ func TestRotate_DeletesOldToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	if !deleteCalled {
 		t.Error("expected DELETE call for old token name, got none")
 	}
@@ -260,6 +261,7 @@ func TestRotate_LogInjection_TokenNameSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed, got: %v", err)
 	}
+	_ = a.Drain(context.Background())
 
 	logged := logBuf.String()
 	// The injected suffix must NOT appear as a standalone log line.
@@ -491,6 +493,7 @@ func TestRotate_DeleteOldToken_LogsFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed despite delete failure, got: %v", err)
 	}
+	_ = a.Drain(context.Background())
 
 	// The failure must appear in the log.
 	logged := logBuf.String()

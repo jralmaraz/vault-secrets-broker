@@ -235,6 +235,7 @@ func TestRotate_DeletesOldKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	if !deleteCalled {
 		t.Error("expected DELETE call for old key id, got none")
 	}
@@ -266,6 +267,7 @@ func TestRotate_OldKeyDeleteFailure_LogsAndSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed despite delete failure, got: %v", err)
 	}
+	_ = a.Drain(context.Background())
 
 	logged := logBuf.String()
 	if !strings.Contains(logged, "best-effort delete of old key failed") {
@@ -302,6 +304,7 @@ func TestRotate_LogInjection_KeyIDSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed, got: %v", err)
 	}
+	_ = a.Drain(context.Background())
 
 	logged := logBuf.String()
 	// The raw newline must NOT appear in the log.

@@ -201,6 +201,7 @@ func TestRotate_DeletesOldKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	if !deleteCalled {
 		t.Error("expected DELETE call for old key id, got none")
 	}
@@ -230,6 +231,7 @@ func TestRotate_OldKeyDeleteFailure_LogsAndSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed despite delete failure: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	if !strings.Contains(logBuf.String(), "best-effort delete of old key failed") {
 		t.Errorf("expected warning in log, got: %q", logBuf.String())
 	}
@@ -292,6 +294,7 @@ func TestRotate_LogInjection_OldKeyIDSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	logged := logBuf.String()
 	if strings.Contains(logged, "\n"+strings.Split(injected, "\n")[1]) {
 		t.Errorf("log injection not sanitized: %q", logged)

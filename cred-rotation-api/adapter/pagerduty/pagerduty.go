@@ -25,7 +25,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 )
@@ -38,6 +41,7 @@ const (
 	tokenTimeFmt     = "20060102T150405Z"
 	deleteOldTimeout = 10 * time.Second
 	pdAccept         = "application/vnd.pagerduty+json;version=2"
+	defaultSemLimit  = 10
 )
 
 // Adapter rotates PagerDuty API keys via the PagerDuty REST API v2.
@@ -47,6 +51,9 @@ type Adapter struct {
 	email      string
 	httpClient *http.Client
 	logger     *slog.Logger
+
+	sem       *semaphore.Weighted
+	cleanupWg sync.WaitGroup
 }
 
 // Config carries parameters needed to construct the PagerDuty adapter.
@@ -93,10 +100,14 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 		httpClient: &http.Client{
 			Timeout: httpTimeout,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13},
+				TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS13},
+				MaxConnsPerHost:     defaultSemLimit,
+				MaxIdleConnsPerHost: defaultSemLimit,
+				MaxIdleConns:        defaultSemLimit * 2,
 			},
 		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sem:    semaphore.NewWeighted(defaultSemLimit),
 	}
 	for _, o := range opts {
 		o(a)
@@ -111,6 +122,11 @@ func (a *Adapter) Name() string { return adapterName }
 // If req.Meta["old_key_id"] is set, the old key is deleted best-effort in a
 // detached context so caller deadline expiry cannot silently skip cleanup.
 func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapter.Result, error) {
+	if err := a.sem.Acquire(ctx, 1); err != nil {
+		return adapter.Result{}, fmt.Errorf("pagerduty rotate: acquire slot: %w", err)
+	}
+	defer a.sem.Release(1)
+
 	suffix, err := randomHex(2)
 	if err != nil {
 		return adapter.Result{}, fmt.Errorf("pagerduty rotate: generate name suffix: %w", err)
@@ -123,15 +139,25 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 	}
 
 	if oldID, ok := req.Meta["old_key_id"]; ok && oldID != "" {
-		deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
-		defer cancel()
-		if err := a.deleteKey(deleteCtx, oldID); err != nil {
-			a.logger.Warn("pagerduty: best-effort delete of old key failed",
-				"old_key_id", sanitizeForLog(oldID),
-				"provider_id", sanitizeForLog(req.ProviderID),
-				"err", sanitizeForLog(err.Error()),
-			)
-		}
+		providerID := req.ProviderID
+		a.cleanupWg.Add(1)
+		go func() {
+			defer a.cleanupWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					a.logger.Error("pagerduty: cleanup goroutine panic", "panic", fmt.Sprint(r))
+				}
+			}()
+			deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
+			defer cancel()
+			if err := a.deleteKey(deleteCtx, oldID); err != nil {
+				a.logger.Warn("pagerduty: best-effort delete of old key failed",
+					"old_key_id", sanitizeForLog(oldID),
+					"provider_id", sanitizeForLog(providerID),
+					"err", sanitizeForLog(err.Error()),
+				)
+			}
+		}()
 	}
 
 	return adapter.Result{
@@ -140,6 +166,21 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		Credential:   keyValue,
 		RotatedAt:    time.Now().UTC(),
 	}, nil
+}
+
+// Drain waits for all in-flight cleanup goroutines to finish or ctx to expire.
+func (a *Adapter) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		a.cleanupWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Revoke deletes the PagerDuty API key with the given ID. Fails closed if empty.

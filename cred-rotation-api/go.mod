@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/spiffe/go-spiffe/v2 v2.8.1
+	golang.org/x/sync v0.22.0
 )
 
 require (

@@ -27,7 +27,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
 )
@@ -38,6 +41,7 @@ const (
 	bodyLimit        = 1 << 20 // 1 MiB
 	tokenTimeFmt     = "20060102T150405Z"
 	deleteOldTimeout = 10 * time.Second
+	defaultSemLimit  = 10
 )
 
 // Adapter rotates SonarQube user tokens via the SonarQube Web API.
@@ -46,6 +50,9 @@ type Adapter struct {
 	adminToken string
 	httpClient *http.Client
 	logger     *slog.Logger
+
+	sem       *semaphore.Weighted // caps concurrent outbound calls to SonarQube
+	cleanupWg sync.WaitGroup      // tracks in-flight best-effort cleanup goroutines
 }
 
 // Config carries parameters needed to construct the SonarQube adapter.
@@ -70,6 +77,17 @@ func WithLogger(l *slog.Logger) Option {
 	return func(a *Adapter) { a.logger = l }
 }
 
+// WithTestTransport replaces the HTTP transport. Use only in tests to accept
+// self-signed httptest.TLSServer certificates.
+func WithTestTransport(t http.RoundTripper) Option {
+	return func(a *Adapter) {
+		a.httpClient = &http.Client{
+			Timeout:   a.httpClient.Timeout,
+			Transport: t,
+		}
+	}
+}
+
 // New constructs a SonarQube adapter from Config.
 func New(cfg Config, opts ...Option) (*Adapter, error) {
 	if cfg.BaseURL == "" {
@@ -84,10 +102,14 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 		httpClient: &http.Client{
 			Timeout: httpTimeout,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13},
+				TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS13},
+				MaxConnsPerHost:     defaultSemLimit,
+				MaxIdleConnsPerHost: defaultSemLimit,
+				MaxIdleConns:        defaultSemLimit * 2,
 			},
 		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sem:    semaphore.NewWeighted(defaultSemLimit),
 	}
 	for _, o := range opts {
 		o(a)
@@ -109,6 +131,11 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		return adapter.Result{}, errors.New("sonarqube rotate: provider_id (login) is required")
 	}
 
+	if err := a.sem.Acquire(ctx, 1); err != nil {
+		return adapter.Result{}, fmt.Errorf("sonarqube rotate: acquire slot: %w", err)
+	}
+	defer a.sem.Release(1)
+
 	suffix, err := randomHex(2)
 	if err != nil {
 		return adapter.Result{}, fmt.Errorf("sonarqube rotate: generate name suffix: %w", err)
@@ -126,15 +153,25 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 	}
 
 	if oldName, ok := req.Meta["old_token_name"]; ok && oldName != "" {
-		deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
-		defer cancel()
-		if err := a.revokeToken(deleteCtx, req.ProviderID, oldName); err != nil {
-			a.logger.Warn("sonarqube: best-effort revoke of old token failed",
-				"login", sanitizeForLog(req.ProviderID),
-				"old_token_name", sanitizeForLog(oldName),
-				"err", sanitizeForLog(err.Error()),
-			)
-		}
+		login := req.ProviderID
+		a.cleanupWg.Add(1)
+		go func() {
+			defer a.cleanupWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					a.logger.Error("sonarqube: cleanup goroutine panic", "panic", fmt.Sprint(r))
+				}
+			}()
+			deleteCtx, cancel := context.WithTimeout(context.Background(), deleteOldTimeout)
+			defer cancel()
+			if err := a.revokeToken(deleteCtx, login, oldName); err != nil {
+				a.logger.Warn("sonarqube: best-effort revoke of old token failed",
+					"login", sanitizeForLog(login),
+					"old_token_name", sanitizeForLog(oldName),
+					"err", sanitizeForLog(err.Error()),
+				)
+			}
+		}()
 	}
 
 	return adapter.Result{
@@ -143,6 +180,22 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 		Credential:   tokenValue,
 		RotatedAt:    time.Now().UTC(),
 	}, nil
+}
+
+// Drain waits for all in-flight cleanup goroutines to finish or ctx to expire.
+// Called during graceful shutdown to avoid abandoning old-credential deletions.
+func (a *Adapter) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		a.cleanupWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Revoke revokes the SonarQube token identified by req.CredentialID.
