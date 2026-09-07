@@ -35,7 +35,7 @@ jobs:
     steps:
       # ── 1. Acknowledge the command immediately ────────────────────────────────
       - name: React with 👀 to acknowledge
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -48,7 +48,7 @@ jobs:
       # ── 2. Find the PR's head branch and SHA ─────────────────────────────────
       - name: Get PR head ref
         id: pr
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const { data: pr } = await github.rest.pulls.get({
@@ -104,7 +104,7 @@ jobs:
       # ── 6. Post result as PR comment (replace previous slash-command result) ──
       - name: Post integration test results
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -178,7 +178,7 @@ jobs:
       # ── 7. React with ✅ or ❌ on the original command comment ───────────────
       - name: React with result emoji
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const passed = '${{ steps.tests.outputs.exit_code }}' === '0';
