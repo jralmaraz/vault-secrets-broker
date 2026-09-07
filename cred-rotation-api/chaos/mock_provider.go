@@ -21,11 +21,11 @@ import (
 type MockProvider struct {
 	*httptest.Server
 
-	mu        sync.Mutex
-	latency   time.Duration // added to every response
-	errRate   float64       // 0.0–1.0: fraction of requests that return 500
-	rate429   float64       // 0.0–1.0: fraction of requests that return 429
-	blockCh   chan struct{}  // if non-nil, requests block until channel is closed
+	mu      sync.Mutex
+	latency time.Duration // added to every response
+	errRate float64       // 0.0–1.0: fraction of requests that return 500
+	rate429 float64       // 0.0–1.0: fraction of requests that return 429
+	blockCh chan struct{} // if non-nil, requests block until channel is closed
 
 	// Counters for assertion in tests.
 	TotalRequests    atomic.Int64

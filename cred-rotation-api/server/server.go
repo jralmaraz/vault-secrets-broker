@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	readTimeout            = 10 * time.Second
-	writeTimeout           = 30 * time.Second
-	idleTimeout            = 60 * time.Second
-	shutdownTimeout        = 15 * time.Second
-	defaultMaxConcurrency  = 100
+	readTimeout           = 10 * time.Second
+	writeTimeout          = 30 * time.Second
+	idleTimeout           = 60 * time.Second
+	shutdownTimeout       = 15 * time.Second
+	defaultMaxConcurrency = 100
 )
 
 // Server is the cred-rotation-api mTLS HTTP server.
