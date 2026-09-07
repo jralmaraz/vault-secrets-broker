@@ -155,7 +155,7 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 	if oldName, ok := req.Meta["old_token_name"]; ok && oldName != "" {
 		login := req.ProviderID
 		a.cleanupWg.Add(1)
-		go func() {
+		go func() { //nolint:gosec // G118: intentional — independent context so cleanup isn't cancelled when the caller's request context expires
 			defer a.cleanupWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
