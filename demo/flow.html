@@ -715,28 +715,37 @@ Content-Type: application/json
   },
 ];
 
-// SPIFFE/SPIRE Flow (4 pre-steps + same 9 rotation steps, shared where possible)
+// SPIFFE/SPIRE Flow
+// Correct order: consumer triggers the request → vault dispatches to plugin →
+// plugin obtains its own Vault token via SPIFFE (for Transit access) → rotation proceeds.
 const SPIFFE_STEPS = [
+  // Step 1: Consumer requests credential — same starting point as AppRole
+  {...APPROLE_STEPS[1]},
+  // Step 2: Vault dispatches to the plugin
+  {...APPROLE_STEPS[2]},
+  // Steps 3-7: Plugin authenticates to Vault via SPIFFE to get a Transit-scoped token.
+  // In AppRole mode this token is static; SPIFFE replaces it with a cryptographically
+  // attested, short-lived SVID — no static secrets stored on disk.
   {
     title: 'Fetch JWT-SVID from SPIRE Agent',
     fromNode: 'api', toNode: 'spire-a', edge: 'e-asa', reverse: false,
     type: 'spiffe',
     channel: 'workload API  ·  gRPC unix socket  ·  FetchJWTSVID()',
-    security: 'The cred-rotation-api workload calls the SPIRE Agent via unix domain socket. No TLS needed — the socket is filesystem-protected. SPIRE has already attested this process via OS-level selectors at startup.',
+    security: 'cred-rotation-api calls the co-located SPIRE Agent over a unix domain socket to fetch a short-lived JWT-SVID. No TLS needed — the socket is filesystem-protected. SPIRE attested this process at startup via OS-level selectors (PID, binary hash, cgroup membership).',
     spiffe: true,
-    req: `<span class="hl-dim">// gRPC workload API — unix socket</span>
+    req: `<span class="hl-dim">// gRPC workload API — unix socket (loopback only)</span>
 FetchJWTSVID(
   audience: [<span class="hl-str">"vault"</span>],
   spiffe_id: <span class="hl-str">"spiffe://example.org/cred-rotation-api"</span>
 )`,
-    res: `<span class="hl-dim">→ SPIRE Agent checks workload attestation, issues SVID</span>`,
+    res: `<span class="hl-dim">→ SPIRE Agent verifies workload attestation, issues SVID</span>`,
   },
   {
     title: 'JWT-SVID Issued by SPIRE Agent',
     fromNode: 'spire-a', toNode: 'api', edge: 'e-asa', reverse: true,
     type: 'spiffe',
     channel: 'workload API  ·  RESPONSE  ·  TTL: 5 minutes',
-    security: 'The JWT-SVID carries the workload\'s SPIFFE ID as the "sub" claim and is signed by SPIRE Server\'s CA. Valid for 5 minutes — even if captured, the token expires before it can be reused. No static Vault token is ever stored on disk.',
+    security: 'The JWT-SVID carries the workload\'s SPIFFE ID as the "sub" claim and is signed by SPIRE Server\'s CA key. Valid for 5 minutes — even if intercepted, it expires long before it can be reused elsewhere. Zero static credentials on disk.',
     spiffe: true,
     req: `JWTSVIDResponse {
   <span class="hl-svid">"jwt"</span>: <span class="hl-svid">"${SVID}"</span>,
@@ -744,14 +753,14 @@ FetchJWTSVID(
   <span class="hl-key">"hint"</span>: <span class="hl-str">"workload-attested"</span>,
   <span class="hl-key">"expires_at"</span>: <span class="hl-val">1757077200</span> <span class="hl-dim">// 5-minute TTL</span>
 }`,
-    res: `<span class="hl-dim">→ API uses JWT-SVID to authenticate to Vault</span>`,
+    res: `<span class="hl-dim">→ plugin uses the SVID to authenticate to Vault Transit</span>`,
   },
   {
     title: 'JWT Auth Login to Vault',
     fromNode: 'api', toNode: 'vault', edge: 'e-va', reverse: true,
     type: 'spiffe',
     channel: 'TLS 1.3  ·  POST /v1/auth/jwt/login',
-    security: 'No static AppRole secret_id. cred-rotation-api presents its JWT-SVID as the credential. Vault\'s JWT auth method is configured with the SPIRE trust domain — only SVIDs from this trust domain are accepted.',
+    security: 'No static AppRole secret_id. cred-rotation-api presents its JWT-SVID as the credential. Vault\'s JWT auth method is bound to the SPIRE trust domain — only SVIDs from spiffe://example.org/ are accepted, and only for the cred-rotation-api role.',
     spiffe: true,
     req: `POST /v1/auth/jwt/login HTTP/1.1
 Host: vault.internal:8200
@@ -761,14 +770,14 @@ Content-Type: application/json
   <span class="hl-svid">"jwt"</span>:  <span class="hl-svid">"${SVID.slice(0,40)}…"</span>,
   <span class="hl-key">"role"</span>: <span class="hl-str">"cred-rotation-api"</span>
 }`,
-    res: `<span class="hl-dim">→ Vault validates JWT via SPIRE OIDC endpoint</span>`,
+    res: `<span class="hl-dim">→ Vault validates JWT against SPIRE's OIDC endpoint</span>`,
   },
   {
     title: 'Vault Validates SVID via OIDC',
     fromNode: 'vault', toNode: 'spire-s', edge: 'e-vs', reverse: false,
     type: 'spiffe',
     channel: 'TLS 1.3  ·  GET /.well-known/jwks.json  ·  SPIRE OIDC',
-    security: 'Vault fetches SPIRE\'s JWKS endpoint to cryptographically validate the JWT-SVID signature. SPIRE Server acts as an OIDC provider. Vault caches the JWKS; only signature verification happens here — no token exchange.',
+    security: 'Vault fetches SPIRE Server\'s JWKS endpoint to cryptographically verify the JWT-SVID signature. SPIRE acts as an OIDC provider. Vault caches the JWKS — only signature and claim validation occur here, no token exchange.',
     spiffe: true,
     req: `GET /.well-known/jwks.json HTTP/1.1
 Host: spire-server:8080 <span class="hl-dim">// OIDC discovery endpoint</span>`,
@@ -778,14 +787,14 @@ Host: spire-server:8080 <span class="hl-dim">// OIDC discovery endpoint</span>`,
     <span class="hl-key">"n"</span>: <span class="hl-str">"qGnq7Hd2..."</span>, <span class="hl-key">"e"</span>: <span class="hl-str">"AQAB"</span>
   }]
 }
-<span class="hl-dim">→ Vault verifies JWT signature, trust domain, audience</span>`,
+<span class="hl-dim">→ Vault verifies JWT signature, trust domain, audience claim</span>`,
   },
   {
     title: 'Short-Lived Vault Token Issued',
     fromNode: 'vault', toNode: 'api', edge: 'e-va', reverse: false,
     type: 'auth',
     channel: 'TLS 1.3  ·  RESPONSE  ·  Token TTL: 5 minutes',
-    security: 'Vault issues a short-lived (5 min) token scoped to the cred-rotation-api policy. Even if this token is captured, it expires in 5 minutes — well before a rotation cycle. No static Vault tokens on disk, anywhere.',
+    security: 'Vault issues a short-lived (5 min) token scoped only to the cred-rotation-api Transit policy. Even if captured, it expires before a rotation cycle completes. No static Vault tokens anywhere — each rotation starts with a fresh SVID.',
     spiffe: true,
     req: `HTTP/1.1 200 OK
 
@@ -799,10 +808,10 @@ Host: spire-server:8080 <span class="hl-dim">// OIDC discovery endpoint</span>`,
     }
   }
 }`,
-    res: `<span class="hl-dim">→ API uses this token for Transit calls during rotation</span>`,
+    res: `<span class="hl-dim">→ plugin uses this token for Transit encrypt/decrypt</span>`,
   },
-  // Shared rotation steps (same as AppRole steps 2-10 with small tweaks)
-  ...APPROLE_STEPS.slice(2).map(s => ({...s})),
+  // Steps 8+: rotation, encrypt, lease, return — same as AppRole from "Rotate at SaaS" onwards
+  ...APPROLE_STEPS.slice(3).map(s => ({...s})),
 ];
 
 const FLOWS = {
