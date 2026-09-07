@@ -101,7 +101,7 @@ func New(cfg Config, opts ...Option) (*Adapter, error) {
 
 	tlsCfg := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: cfg.Insecure, //nolint:gosec // only for local Docker integration tests, never production
+		InsecureSkipVerify: cfg.Insecure, //nolint:gosec // #nosec G402 -- only for local Docker integration tests, never production
 	}
 	if cfg.CACert != "" {
 		pool := x509.NewCertPool()

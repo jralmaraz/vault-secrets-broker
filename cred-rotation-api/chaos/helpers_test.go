@@ -12,7 +12,7 @@ import (
 // insecureTransport allows loopback-only test servers with self-signed certs.
 // Never use outside test code.
 var insecureTransport = &http.Transport{
-	TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+	TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // #nosec G402 -- loopback httptest certs only, never production
 }
 
 // newSonarqubeAdapterFromURL builds a sonarqube adapter pointed at url,

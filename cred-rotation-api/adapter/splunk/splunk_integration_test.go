@@ -79,7 +79,7 @@ func splunkSessionToken(baseURL, rawCred string) (string, error) {
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: insecure, //nolint:gosec // only for local Docker integration tests, never production
+				InsecureSkipVerify: insecure, //nolint:gosec // #nosec G402 -- only for local Docker integration tests, never production
 			},
 		},
 	}
