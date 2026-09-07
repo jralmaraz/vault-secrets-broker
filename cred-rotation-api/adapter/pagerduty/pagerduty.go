@@ -141,7 +141,7 @@ func (a *Adapter) Rotate(ctx context.Context, req adapter.RotateRequest) (adapte
 	if oldID, ok := req.Meta["old_key_id"]; ok && oldID != "" {
 		providerID := req.ProviderID
 		a.cleanupWg.Add(1)
-		go func() { //nolint:gosec // G118: intentional — independent context so cleanup isn't cancelled when the caller's request context expires
+		go func() { //nolint:gosec // G118: intentional — independent context so cleanup isn't cancelled when the caller's request context expires // #nosec G118
 			defer a.cleanupWg.Done()
 			defer func() {
 				if r := recover(); r != nil {

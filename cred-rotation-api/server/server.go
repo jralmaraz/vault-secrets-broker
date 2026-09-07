@@ -173,7 +173,7 @@ func concurrencyLimiter(limit int64, logger *slog.Logger, next http.Handler) htt
 			inFlight.Add(-1)
 			logger.Warn("request rejected: concurrency limit reached",
 				"limit", limit,
-				"path", r.URL.Path,
+				"path", fmt.Sprintf("%q", r.URL.Path),
 			)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
