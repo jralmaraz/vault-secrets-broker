@@ -123,7 +123,7 @@ func (mp *MockProvider) wrap(next http.Handler) http.Handler {
 			time.Sleep(lat)
 		}
 
-		roll := rand.Float64() //nolint:gosec // #nosec G404 -- fault-injection mock intentionally uses weak RNG
+		roll := rand.Float64() // #nosec G404 //nolint:gosec -- fault-injection mock uses weak RNG intentionally
 		if roll < rate429 {
 			mp.Rejected429.Add(1)
 			w.Header().Set("Retry-After", "1")
