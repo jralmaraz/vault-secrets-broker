@@ -225,6 +225,14 @@ pre.code-block {
 .callout strong { color: var(--text); }
 .callout p { color: var(--text-dim); margin: 0; }
 
+/* ── Theme toggle ── */
+.theme-btn {
+  font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 99px;
+  background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border);
+  cursor: pointer; white-space: nowrap; transition: color .15s, border-color .15s;
+}
+.theme-btn:hover { color: var(--text); border-color: var(--text-dim); }
+
 /* ── Footer ── */
 footer {
   border-top: 1px solid var(--border); text-align: center;
@@ -242,8 +250,9 @@ footer a { color: var(--purple); text-decoration: none; }
     <span class="badge badge-purple">Go 1.27</span>
     <span class="badge badge-cyan">Vault 1.18+</span>
     <span class="badge badge-green">Transit AES-256-GCM96</span>
-    <span class="badge badge-green">6 Adapters</span>
+    <span class="badge badge-green">Extensible Adapters</span>
     <span class="badge badge-purple">SPIFFE / SPIRE</span>
+    <button class="theme-btn" onclick="toggleTheme()">◑ Theme</button>
   </div>
 </header>
 
@@ -259,7 +268,7 @@ footer a { color: var(--purple); text-decoration: none; }
     vault·secrets·broker fills the gap for every platform that doesn't have one —
     automating credential rotation by calling the platform's API directly,
     protected by Transit envelope encryption, mTLS, and SPIFFE workload identity.
-    Six adapters. Zero static secrets.
+    Extensible to any platform with a REST API. Zero static secrets.
   </p>
   <div class="hero-cta">
     <a class="btn btn-primary" href="flow.html">Live Rotation Simulator →</a>
@@ -567,7 +576,7 @@ footer a { color: var(--purple); text-decoration: none; }
         <div class="phase-num p-done">✓</div>
         <div>
           <div class="phase-title">Phase 5 — Multi-Provider Adapter Suite</div>
-          <div class="phase-desc">Six adapters for platforms with no native Vault secrets engine — proving the abstraction layer: each new platform requires only a new adapter, zero plugin changes. Examples include SIEM platforms, identity providers, observability tools, and incident management.</div>
+          <div class="phase-desc">Adapters for platforms with no native Vault secrets engine — proving the abstraction layer: each new platform requires only a new adapter, zero plugin changes. Examples built: SIEM, identity provider, observability, and incident management platforms.</div>
           <div class="phase-tags">
             <span class="tag">Auth0</span>
             <span class="tag">Splunk</span>
@@ -686,6 +695,14 @@ vault write -field=plaintext transit/decrypt/cred-rotation-key \
     var isDark = forcedTheme === 'dark' || (!forcedTheme && prefersDark);
     mermaid.initialize({ startOnLoad: true, theme: isDark ? 'dark' : 'default' });
   })();
+
+  function toggleTheme() {
+    var root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === 'dark' ? 'light'
+                       : root.dataset.theme === 'light' ? ''
+                       : 'dark';
+    if (!root.dataset.theme) delete root.dataset.theme;
+  }
 </script>
 </body>
 </html>
