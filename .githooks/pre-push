@@ -135,14 +135,17 @@ else
       info "$mod: no packages — skipping"
       continue
     fi
-    ISSUES=$(cd "$dir" && "$GOSEC" -fmt text -severity medium -confidence medium ./... 2>&1 | \
-      grep "^  Issues" | grep -v ": 0" || true)
-    if [[ -n "$ISSUES" ]]; then
-      (cd "$dir" && "$GOSEC" -fmt text -severity medium -confidence medium ./... 2>&1 | grep -v "^\[gosec\]")
-      fail "$mod: gosec found issues — check output above"
-      GOSEC_FAILED=1
-    else
+    # Capture output + exit code separately — a pipe would yield grep's exit code.
+    set +e
+    GOSEC_OUT=$(cd "$dir" && "$GOSEC" -fmt text -severity medium -confidence medium ./... 2>&1)
+    GOSEC_EXIT=$?
+    set -e
+    echo "$GOSEC_OUT" | grep -v "^\[gosec\]"
+    if [[ $GOSEC_EXIT -eq 0 ]]; then
       ok "$mod: gosec passed"
+    else
+      fail "$mod: gosec found issues — see output above"
+      GOSEC_FAILED=1
     fi
   done
   [[ $GOSEC_FAILED -eq 0 ]] || exit 1
