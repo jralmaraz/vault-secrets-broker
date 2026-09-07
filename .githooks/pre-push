@@ -14,6 +14,8 @@ GOLANGCI="${GOLANGCI_LINT:-$(which golangci-lint 2>/dev/null || echo "$HOME/go/b
 [[ -x "$GOLANGCI" ]] || GOLANGCI=""
 GOVULNCHECK="${GOVULNCHECK:-$(which govulncheck 2>/dev/null || echo "$HOME/go/bin/govulncheck")}"
 [[ -x "$GOVULNCHECK" ]] || GOVULNCHECK=""
+GOSEC="${GOSEC:-$(which gosec 2>/dev/null || echo "$HOME/go/bin/gosec")}"
+[[ -x "$GOSEC" ]] || GOSEC=""
 VAULT_BIN="${VAULT:-$(which vault 2>/dev/null || true)}"
 
 MODULES=(
@@ -115,7 +117,41 @@ for mod in "${MODULES[@]}"; do
 done
 [[ $VULN_FAILED -eq 0 ]] || exit 1
 
-# ── 4. golangci-lint (required — blocks push if not installed or fails) ───────
+# ── 4. gosec (optional binary — warns if not installed, blocks on findings) ───
+# golangci-lint runs gosec via //nolint:gosec; the standalone gosec binary is
+# what CI uses for SARIF upload and requires // #nosec annotations. Running
+# both locally catches annotation mismatches before they reach CI.
+echo
+echo "→ gosec"
+if [[ -z "$GOSEC" ]]; then
+  warn "gosec binary not found — skipping standalone gosec check"
+  warn "CI runs gosec separately; install locally to catch annotation mismatches:"
+  warn "  go install github.com/securego/gosec/v2/cmd/gosec@latest"
+else
+  GOSEC_FAILED=0
+  for mod in "${MODULES[@]}"; do
+    dir="$REPO_ROOT/$mod"
+    if ! (cd "$dir" && "$GO" list ./... 2>/dev/null | grep -q .); then
+      info "$mod: no packages — skipping"
+      continue
+    fi
+    # Capture output + exit code separately — a pipe would yield grep's exit code.
+    set +e
+    GOSEC_OUT=$(cd "$dir" && "$GOSEC" -fmt text -severity medium -confidence medium ./... 2>&1)
+    GOSEC_EXIT=$?
+    set -e
+    echo "$GOSEC_OUT" | grep -v "^\[gosec\]"
+    if [[ $GOSEC_EXIT -eq 0 ]]; then
+      ok "$mod: gosec passed"
+    else
+      fail "$mod: gosec found issues — see output above"
+      GOSEC_FAILED=1
+    fi
+  done
+  [[ $GOSEC_FAILED -eq 0 ]] || exit 1
+fi
+
+# ── 5. golangci-lint (required — blocks push if not installed or fails) ───────
 echo
 echo "→ golangci-lint"
 if [[ -z "$GOLANGCI" ]]; then

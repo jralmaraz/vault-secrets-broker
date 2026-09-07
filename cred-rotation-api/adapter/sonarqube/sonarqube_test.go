@@ -215,6 +215,8 @@ func TestRotate_RevokesOldToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
+	// Cleanup is async; wait for it before asserting.
+	_ = a.Drain(context.Background())
 	if !revokeCalled {
 		t.Error("expected revoke call for old token, got none")
 	}
@@ -242,6 +244,7 @@ func TestRotate_OldTokenRevokeFailure_LogsAndSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed despite revoke failure: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	if !strings.Contains(logBuf.String(), "best-effort revoke of old token failed") {
 		t.Errorf("expected warning in log, got: %q", logBuf.String())
 	}
@@ -309,6 +312,7 @@ func TestRotate_LogInjection_OldTokenNameSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rotate should succeed: %v", err)
 	}
+	_ = a.Drain(context.Background())
 	logged := logBuf.String()
 	if strings.Contains(logged, "\n"+strings.Split(injected, "\n")[1]) {
 		t.Errorf("log injection not sanitized: %q", logged)

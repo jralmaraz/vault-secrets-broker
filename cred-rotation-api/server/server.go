@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/jralmaraz/vault-secrets-broker/cred-rotation-api/adapter"
@@ -17,10 +18,11 @@ import (
 )
 
 const (
-	readTimeout     = 10 * time.Second
-	writeTimeout    = 30 * time.Second
-	idleTimeout     = 60 * time.Second
-	shutdownTimeout = 15 * time.Second
+	readTimeout           = 10 * time.Second
+	writeTimeout          = 30 * time.Second
+	idleTimeout           = 60 * time.Second
+	shutdownTimeout       = 15 * time.Second
+	defaultMaxConcurrency = 100
 )
 
 // Server is the cred-rotation-api mTLS HTTP server.
@@ -28,6 +30,7 @@ type Server struct {
 	http      *http.Server
 	logger    *slog.Logger
 	tlsConfig *tls.Config
+	registry  *adapter.Registry
 }
 
 // Config groups the dependencies needed by the server at construction time.
@@ -56,6 +59,10 @@ type Config struct {
 	// If a path has no entry, any verified cert CN is accepted for that path.
 	// If the map is nil or empty, all endpoints accept any verified cert.
 	CertAllowlist map[string][]string
+
+	// MaxConcurrentRequests is the server-wide in-flight request cap. Requests
+	// beyond this limit receive 503 immediately. Defaults to 100 if zero.
+	MaxConcurrentRequests int
 }
 
 // New constructs a Server from Config. Call ListenAndServeTLS to start it.
@@ -78,6 +85,11 @@ func New(cfg Config) (*Server, error) {
 		logger = slog.Default()
 	}
 
+	maxConcurrent := cfg.MaxConcurrentRequests
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultMaxConcurrency
+	}
+
 	h := &Handlers{
 		registry:       cfg.Registry,
 		vaultClient:    cfg.VaultClient,
@@ -91,9 +103,13 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /v1/credentials/status", h.Status)
 	mux.HandleFunc("GET /healthz", h.Health)
 
+	handler := requestLogger(logger,
+		concurrencyLimiter(int64(maxConcurrent), logger,
+			certAuthz(cfg.CertAllowlist, logger, mux)))
+
 	httpSrv := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      requestLogger(logger, certAuthz(cfg.CertAllowlist, logger, mux)),
+		Handler:      handler,
 		TLSConfig:    cfg.TLSConfig,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
@@ -104,6 +120,7 @@ func New(cfg Config) (*Server, error) {
 		http:      httpSrv,
 		logger:    logger,
 		tlsConfig: cfg.TLSConfig,
+		registry:  cfg.Registry,
 	}, nil
 }
 
@@ -123,11 +140,50 @@ func (s *Server) ListenAndServeTLS() error {
 	return s.http.Serve(ln)
 }
 
-// Shutdown gracefully drains in-flight requests within a deadline.
+// Shutdown gracefully drains in-flight HTTP requests and adapter cleanup goroutines.
 func (s *Server) Shutdown(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
-	return s.http.Shutdown(ctx)
+
+	if err := s.http.Shutdown(ctx); err != nil {
+		return err
+	}
+
+	// Wait for any background cleanup goroutines that adapters launched during rotation.
+	for _, name := range s.registry.Names() {
+		a, err := s.registry.Get(name)
+		if err != nil {
+			continue
+		}
+		if d, ok := a.(adapter.Drainer); ok {
+			if err := d.Drain(ctx); err != nil {
+				s.logger.Warn("adapter drain timed out", "adapter", name, "err", err)
+			}
+		}
+	}
+	return nil
+}
+
+// concurrencyLimiter rejects requests with 503 when the server-wide in-flight
+// count exceeds limit. This prevents unbounded goroutine growth under load spikes.
+func concurrencyLimiter(limit int64, logger *slog.Logger, next http.Handler) http.Handler {
+	var inFlight atomic.Int64
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n := inFlight.Add(1); n > limit {
+			inFlight.Add(-1)
+			logger.Warn("request rejected: concurrency limit reached",
+				"limit", limit,
+				"path", fmt.Sprintf("%q", r.URL.Path),
+			)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"server overloaded, retry after 1s"}`))
+			return
+		}
+		defer inFlight.Add(-1)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requestLogger logs method, path, status, remote address, and client cert identity
