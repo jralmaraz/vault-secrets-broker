@@ -40,7 +40,7 @@ jobs:
     steps:
       # ── 1. Acknowledge immediately ────────────────────────────────────────────
       - name: React 👀 to acknowledge
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -52,7 +52,7 @@ jobs:
 
       # ── 2. Post a warning comment before starting ─────────────────────────────
       - name: Post warning comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.issues.createComment({
@@ -70,7 +70,7 @@ jobs:
       # ── 3. Checkout PR branch ─────────────────────────────────────────────────
       - name: Get PR head ref
         id: pr
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const { data: pr } = await github.rest.pulls.get({
@@ -141,7 +141,7 @@ jobs:
       # ── 7. Post result comment ────────────────────────────────────────────────
       - name: Post result comment
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -185,7 +185,7 @@ jobs:
       # ── 8. Final reaction on the original command comment ─────────────────────
       - name: React with result emoji
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const passed = '${{ steps.tests.outputs.exit_code }}' === '0';
