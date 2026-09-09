@@ -320,10 +320,21 @@ body {
       <rect id="zone-tls-as" x="410" y="20" width="320" height="68" rx="6"
             fill="rgba(96,165,250,.04)" stroke="rgba(96,165,250,.15)" stroke-width="1" stroke-dasharray="4,3"/>
 
-      <!-- Zone labels -->
-      <text x="16" y="34" class="topo-zone-label" fill="rgba(96,165,250,.6)">TLS 1.3</text>
-      <text x="280" y="34" class="topo-zone-label" fill="rgba(251,191,36,.7)">mTLS</text>
-      <text x="630" y="34" class="topo-zone-label" fill="rgba(96,165,250,.6)">TLS 1.3</text>
+      <!-- Zone labels: protocol labels (hidden in SPIFFE mode) -->
+      <text id="label-tls-cv" x="16" y="34" class="topo-zone-label" fill="rgba(96,165,250,.6)">TLS 1.3</text>
+      <text id="label-mtls" x="280" y="34" class="topo-zone-label" fill="rgba(251,191,36,.7)">mTLS</text>
+      <text id="label-tls-as" x="630" y="34" class="topo-zone-label" fill="rgba(96,165,250,.6)">TLS 1.3</text>
+      <!-- Trust-domain zone labels (SPIFFE mode only) -->
+      <text id="label-internal" x="310" y="16" text-anchor="middle" class="topo-zone-label" fill="rgba(52,211,153,.6)" style="display:none">⬡ INTERNAL TRUST DOMAIN</text>
+      <text id="label-external" x="733" y="16" text-anchor="middle" class="topo-zone-label" fill="rgba(248,113,113,.8)" style="display:none">⚠ EXTERNAL</text>
+
+      <!-- Internal / external zone shading (SPIFFE mode only) -->
+      <!-- Separator line at the internal/external boundary -->
+      <line id="zone-separator" x1="655" y1="8" x2="655" y2="102"
+            stroke="rgba(248,113,113,.35)" stroke-width="1" stroke-dasharray="4,3" style="display:none"/>
+      <!-- Red tint over SaaS: only external party -->
+      <rect id="zone-external-bg" x="656" y="8" width="198" height="86" rx="5"
+            fill="rgba(248,113,113,.04)" stroke="rgba(248,113,113,.28)" stroke-width="1" stroke-dasharray="4,3" style="display:none"/>
 
       <!-- ── Edges (drawn before nodes so nodes sit on top) ── -->
 
@@ -361,11 +372,16 @@ body {
             d="M 327,62 C 550,62 550,215 792,195"
             stroke="#2a3450" stroke-width="1.5" fill="none" stroke-dasharray="5,3"/>
 
+      <!-- consumer ↔ consumer SPIRE Agent (vertical, SPIFFE mode only) -->
+      <line id="e-csa" class="topo-edge" style="display:none" x1="67" y1="82" x2="67" y2="158"
+            stroke="#2a3450" stroke-width="1.5" stroke-dasharray="5,3"/>
+
       <!-- ── Channel labels (on edges) ── -->
       <text id="ch-va" x="370" y="55" text-anchor="middle" class="topo-channel" fill="rgba(251,191,36,.6)">mTLS</text>
       <text id="ch-at" x="348" y="128" text-anchor="middle" class="topo-channel" fill="#2a3450">Transit</text>
       <text id="ch-asa" x="565" y="128" text-anchor="middle" class="topo-channel" fill="#2a3450" style="display:none">workload API</text>
       <text id="ch-vs" x="600" y="210" text-anchor="middle" class="topo-channel" fill="#2a3450" style="display:none">OIDC JWKS</text>
+      <text id="ch-csa" x="82" y="126" text-anchor="start" class="topo-channel" fill="#2a3450" style="display:none">workload API</text>
 
       <!-- ── Nodes ── -->
 
@@ -409,20 +425,28 @@ body {
         <text x="259" y="188" text-anchor="middle" fill="#566080" font-size="9">AES-256-GCM96</text>
       </g>
 
-      <!-- SPIRE Agent (hidden in approle) -->
+      <!-- SPIRE Agent co-located with cred-rotation-api (hidden in AppRole) -->
       <g id="node-spire-a" style="display:none">
         <rect x="580" y="158" width="120" height="40" rx="5" class="topo-node-rect"
               fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
         <text x="640" y="173" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">SPIRE Agent</text>
-        <text x="640" y="188" text-anchor="middle" fill="#566080" font-size="9">workload attestation</text>
+        <text x="640" y="188" text-anchor="middle" fill="#566080" font-size="9">co-located · cred-rotation-api</text>
       </g>
 
-      <!-- SPIRE Server (hidden in approle) -->
+      <!-- SPIRE Server — shared trust infrastructure (hidden in AppRole) -->
       <g id="node-spire-s" style="display:none">
         <rect x="728" y="158" width="124" height="40" rx="5" class="topo-node-rect"
               fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
         <text x="790" y="173" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">SPIRE Server</text>
-        <text x="790" y="188" text-anchor="middle" fill="#566080" font-size="9">OIDC provider</text>
+        <text x="790" y="188" text-anchor="middle" fill="#566080" font-size="9">OIDC provider · shared CA</text>
+      </g>
+
+      <!-- Consumer SPIRE Agent co-located with consumer app (hidden in AppRole) -->
+      <g id="node-spire-ca" style="display:none">
+        <rect x="8" y="158" width="119" height="40" rx="5" class="topo-node-rect"
+              fill="#131826" stroke="#2a3450" stroke-width="1.5"/>
+        <text x="67" y="173" text-anchor="middle" fill="#8fa3cc" font-size="10" font-weight="700">SPIRE Agent</text>
+        <text x="67" y="188" text-anchor="middle" fill="#566080" font-size="9">co-located · consumer</text>
       </g>
 
       <!-- Animated packet (positioned/colored by JS) -->
@@ -719,8 +743,11 @@ Content-Type: application/json
 // Correct order: consumer triggers the request → vault dispatches to plugin →
 // plugin obtains its own Vault token via SPIFFE (for Transit access) → rotation proceeds.
 const SPIFFE_STEPS = [
-  // Step 1: Consumer requests credential — same starting point as AppRole
-  {...APPROLE_STEPS[1]},
+  // Step 1: Consumer requests credential — already SPIFFE-authenticated
+  {
+    ...APPROLE_STEPS[1],
+    security: 'In a full SPIFFE deployment the consumer app has no static Vault token. It authenticates using a JWT-SVID issued by its own co-located SPIRE Agent (shown in the topology, bottom-left). That SVID exchange follows the same pattern as steps 3–7 — cryptographic workload attestation, short-lived token, zero static credentials. This step represents the already-authenticated consumer sending a credential request over TLS 1.3.',
+  },
   // Step 2: Vault dispatches to the plugin
   {...APPROLE_STEPS[2]},
   // Steps 3-7: Plugin authenticates to Vault via SPIFFE to get a Transit-scoped token.
@@ -834,9 +861,14 @@ const SPEED_LABELS = { 1: 'Slow', 2: 'Normal', 3: 'Fast', 4: 'Faster', 5: 'Max' 
 /* ─────────────────────────────────────────────
    TOPOLOGY: node/edge SVG manipulation
    ───────────────────────────────────────────── */
-const NODE_IDS = ['consumer','vault','api','saas','transit','spire-a','spire-s'];
-const EDGE_IDS = ['e-cv','e-va','e-as','e-vt','e-at','e-asa','e-aas','e-vs'];
-const SPIFFE_ELEMENTS = ['node-spire-a','node-spire-s','e-asa','e-aas','e-vs','ch-asa','ch-vs'];
+const NODE_IDS = ['consumer','vault','api','saas','transit','spire-a','spire-s','spire-ca'];
+const EDGE_IDS = ['e-cv','e-va','e-as','e-vt','e-at','e-asa','e-aas','e-vs','e-csa'];
+const SPIFFE_ELEMENTS = [
+  'node-spire-a','node-spire-s','node-spire-ca',
+  'e-asa','e-aas','e-vs','e-csa',
+  'ch-asa','ch-vs','ch-csa',
+  'zone-separator','zone-external-bg','label-internal','label-external',
+];
 
 function setNodeActive(nodeId, type) {
   const g = document.getElementById('node-' + nodeId);
@@ -853,7 +885,10 @@ function setNodeActive(nodeId, type) {
     texts[0] && (texts[0].setAttribute('fill', '#e2e8f8'));
     texts[1] && (texts[1].setAttribute('fill', color));
   } else {
-    rect.setAttribute('stroke', '#2a3450');
+    // In SPIFFE mode, SaaS keeps its external-zone red border even when inactive
+    const defaultStroke = (nodeId === 'saas' && currentFlow === 'spiffe')
+      ? 'rgba(248,113,113,.7)' : '#2a3450';
+    rect.setAttribute('stroke', defaultStroke);
     rect.setAttribute('fill', '#131826');
     texts[0] && (texts[0].setAttribute('fill', '#8fa3cc'));
     texts[1] && (texts[1].setAttribute('fill', '#566080'));
@@ -871,7 +906,7 @@ function setEdgeActive(edgeId, type, reverse) {
     // animate packet
     animatePacket(edgeId, type, reverse);
   } else {
-    const dashed = ['e-vt','e-at','e-asa','e-vs'].includes(edgeId);
+    const dashed = ['e-vt','e-at','e-asa','e-vs','e-csa'].includes(edgeId);
     el.setAttribute('stroke', '#2a3450');
     el.setAttribute('stroke-width', '1.5');
     el.setAttribute('stroke-dasharray', dashed ? '5,3' : '');
@@ -912,6 +947,7 @@ const EDGE_PATHS = {
   'e-asa': { pts: [[493,82],[493,140],[637,140],[637,158]], curve: true },
   'e-aas': { pts: [[700,177],[728,177]],         curve: false },
   'e-vs':  { pts: [[327,62],[550,62],[550,215],[792,195]], curve: true },
+  'e-csa': { pts: [[67,82],[67,158]],                    curve: false },
 };
 
 let packetAnim = null;
@@ -1096,7 +1132,14 @@ function applySpiffeVisibility(show) {
     const el = document.getElementById(id);
     if (el) el.style.display = show ? '' : 'none';
   });
-  // Extend zone-tls-as and zone-mtls for SPIFFE (saas shifts left slightly in SPIFFE flow)
+  // In SPIFFE mode swap protocol zone labels for trust-domain labels
+  ['label-tls-cv', 'label-mtls', 'label-tls-as'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = show ? 'none' : '';
+  });
+  // Visually distinguish SaaS as the only external party
+  const saasRect = document.querySelector('#node-saas rect');
+  if (saasRect) saasRect.setAttribute('stroke', show ? 'rgba(248,113,113,.7)' : '#2a3450');
 }
 
 /* ─────────────────────────────────────────────
